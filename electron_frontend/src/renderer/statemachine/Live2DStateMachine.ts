@@ -11,46 +11,41 @@ import {
 import type { StateMachineEvent } from './constants'
 
 export class Live2DStateMachine {
-  // ── 外部引用 ──
+  // ── 模型 ──
   private model: Live2DModel
   private ticker: Ticker
   private tickerCallback: () => void
+  private modelKey = 'sakiko'
 
-  // ── 响应式输出 ──
+  // ── 输出 ──
   readonly textBubble: Ref<string | null> = ref(null)
   readonly userBubble: Ref<string | null> = ref(null)
   readonly isThinking: Ref<boolean> = ref(false)
 
-  // ── 事件队列 ──
-  private eventQueue: StateMachineEvent[] = []
+  // ── 1:1 复刻 Pygame 变量 ──
+  // motion_is_over: bool — 当前动作是否结束
+  private motionIsOver = true
+  // think_motion_is_over: bool — 思考动作是否结束
+  private thinkMotionIsOver = true
+  // live2d_this_turn_motion_complete: bool — 本轮音频是否播完
+  private turnMotionComplete = true
+  // idle_recover_timer: float — 模块级全局，设为一个过去时间戳模拟"早早开始计时"
+  private idleRecoverTimer = 0  // 在 start() 中设为 past time
+  // last_saved_time: float — 25s 待机计时器
+  private lastSavedTime = 0
+  // last_saved_time_think: float — 思考间隔计时器
+  private lastThinkTime = 0
+  // interval_think: int — 思考间隔（首次 1，后续 15）
+  private thinkInterval = THINK_INTERVAL_FIRST
+  // if_bye: bool
+  private ifBye = false
+  // mouse_position_x: 点击标记（None=未点击, 0=已处理）
+  private mouseClicked = false
 
-  // ── 模型状态 ──
-  private modelLoaded = false
-
-  // ── 运动状态 ──
-  private motionInProgress = false
-
-  // ── 音频状态 ──
+  // ── 音频 ──
   private audioPlaying = false
   private currentAudio: HTMLAudioElement | null = null
-  // 口型同步
-  private mouthSyncFrameCount = 0
-  private mouthOpenValue = 0
-  private lipSyncN = 2.8  // 系数，放大 RMS 值使口型更明显（原 Pygame 1.4 在此模型上偏小）
-  private _mouthParamIndex: number = -1  // PARAM_MOUTH_OPEN_Y 的参数索引
-  private audioContext: AudioContext | null = null
-  private analyserNode: AnalyserNode | null = null
-
-  // ── Stale Promise 保护 ──
-  private currentMotionId = 0
   private currentAudioId = 0
-
-  // ── 计时器 ──
-  private idleRecoverDeadline = 0
-  private lastIdleTime = 0
-  private lastThinkTime = 0
-  private thinkInterval = THINK_INTERVAL_FIRST
-  private lastClickTime = 0
 
   // ── 长音频 ──
   private longAudioActive = false
@@ -64,8 +59,19 @@ export class Live2DStateMachine {
   private eyeOpenStartL = 1.0
   private eyeOpenStartR = 1.0
 
-  // ── 角色 key（用于查找模型专属动作组数量）──
-  private modelKey: string = 'sakiko'
+  // ── 口型同步 ──
+  private mouthSyncFrameCount = 0
+  private mouthOpenValue = 0
+  private lipSyncN = 2.8
+  private _mouthParamIndex = -1
+  private audioContext: AudioContext | null = null
+  private analyserNode: AnalyserNode | null = null
+
+  // ── Stale Promise ──
+  private currentMotionId = 0
+  private lastClickTime = 0
+  private eventQueue: StateMachineEvent[] = []
+  private modelLoaded = false
 
   constructor(model: Live2DModel, ticker: Ticker, modelKey?: string) {
     this.model = model
@@ -74,162 +80,91 @@ export class Live2DStateMachine {
     this.tickerCallback = () => this.onTickerUpdate()
   }
 
-  /** 获取当前模型的动作组数量 */
   private getMotionSize(group: string): number {
     return MODEL_SPECIFIC_SIZES[this.modelKey]?.[group] ?? MOTION_GROUP_SIZES[group] ?? 1
   }
 
-  /** 注册 Ticker 回调，开始运行 */
   start(): void {
-    // 高优先级确保在模型更新之后执行（嘴型覆盖动作参数）
     this.ticker.add(this.tickerCallback, undefined, 30 as any)
-    // 设置初始空闲恢复 deadline 为过去时间，启动后立即触发首次 idle_motion（匹配 Pygame 全局计时器行为）
-    this.idleRecoverDeadline = 1  // 毫秒时间戳，永远在过去
-    this.lastIdleTime = performance.now()
+    // Pygame: idle_recover_timer 是模块级全局，在 import 时就设了
+    // 模拟：设为 2.5s 前，确保第一帧就触发 idle_motion
+    this.idleRecoverTimer = performance.now() - IDLE_RECOVER_DELAY_MS - 1
+    this.lastSavedTime = performance.now()
     this.modelLoaded = true
-    // 查找口型参数 API — coreModel.setParamFloat 是底层 C++ 模型
-    // 查找口型参数并 Hook coreModel.update()
-    try {
-      const cm = (this.model.internalModel as any)?.coreModel
-      if (cm?.getParamIndex) {
-        this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
-        console.log('[StateMachine] Mouth param index:', this._mouthParamIndex)
-        // Hook coreModel.update() — 在动作系统设参之后、核心 update 之前插入嘴型值
-        if (this._mouthParamIndex >= 0 && cm.update) {
-          const originalUpdate = cm.update.bind(cm)
-          const self = this
-          cm.update = function() {
-            self._preUpdateMouth()
-            return originalUpdate()
-          }
-          console.log('[StateMachine] Hooked coreModel.update()')
-        }
-      }
-    } catch (e) {
-      console.error('[StateMachine] Mouth param lookup failed:', e)
-    }
-    // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
-    try {
-      // @ts-expect-error internalModel API not fully typed
-      if (this.model.internalModel?.setAutoBlinkEnable) {
-        // @ts-expect-error
-        this.model.internalModel.setAutoBlinkEnable(true)
-      }
-      // @ts-expect-error
-      if (this.model.internalModel?.setAutoBreathEnable) {
-        // @ts-expect-error
-        this.model.internalModel.setAutoBreathEnable(true)
-      }
-    } catch (_e) { /* ignore */ }
+    this._initMouth()
+    this._initBlinkBreath()
     console.log('[StateMachine] Started')
   }
 
-  /** 移除 Ticker 回调，停止运行 */
   destroy(): void {
     this.ticker.remove(this.tickerCallback, undefined)
     this.stopAudio()
-    if (this.audioContext) {
-      try { this.audioContext.close() } catch (_e) { /* ignore */ }
-      this.audioContext = null
-    }
+    if (this.audioContext) { try { this.audioContext.close() } catch (_) {}; this.audioContext = null }
     this.modelLoaded = false
     console.log('[StateMachine] Destroyed')
   }
 
-  /** 从外部（useWebSocket）推入事件 */
   pushEvent(event: StateMachineEvent): void {
-    if (!this.modelLoaded) {
-      // 缓冲事件，模型加载后重放（避免切换角色时丢失事件）
-      this.eventQueue.push(event)
-      return
-    }
+    if (!this.modelLoaded) { this.eventQueue.push(event); return }
     this.eventQueue.push(event)
   }
 
-  /** 每帧由 PixiJS Ticker 调用 */
+  // ── 主循环：每帧由 Ticker 调用 ──
   private onTickerUpdate(): void {
     const now = performance.now()
     this.processEvents(now)
+    this.checkThinking(now)
     this.checkIdleRecover(now)
     this.checkTimedIdle(now)
-    this.checkThinkingMotion(now)
+    this.checkClick(now)
+    this.turnMotionComplete = !this.audioPlaying
     this.checkLongAudioLoop(now)
     this.updateEyeOpen(now)
   }
 
-  // ── 以下方法在后续任务中实现 ──
-
+  // ── processEvents: 消费 WS 事件队列 ──
   private processEvents(now: number): void {
     while (this.eventQueue.length > 0) {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
-          // emotion 到达 = 开始说话，结束思考状态
-          this.isThinking.value = false
-          this.thinkInterval = THINK_INTERVAL_FIRST
           const { label, audio, text } = event.data
+          if (label === 'bye') {
+            this._resetLongAudio()
+            if (!this.ifBye) {
+              this.motionIsOver = false
+              this._playMotion('bye', 3)
+            }
+            this.ifBye = true
+            setTimeout(() => { try { (window as any).electronAPI?.closeWindow() } catch (_) { window.close() } }, BYE_TIMEOUT_MS)
+            break
+          }
           const group = EMOTION_MAP[label]
+          if (!group) break
 
-          // 打断当前音频
-          if (this.currentAudio) {
-            this.currentAudio.pause()
-            this.currentAudio = null
-            this.audioPlaying = false
-          }
+          this._resetLongAudio()
+          this.motionIsOver = false
+          this.thinkMotionIsOver = true  // Pygame: 放在这里就对了
 
-          // 重置计时器
-          this.idleRecoverDeadline = 0
-          this.lastIdleTime = now
-          this.longAudioActive = false
-          this.longAudioTriggeredCount = 0
-
-          // 启动动作（如果情感标签有效）
-          if (group) {
-            this.currentMotionId++
-            const motionId = this.currentMotionId
-            this.eyeOpenPending = false
-            const size = this.getMotionSize(group)
-            const idx = Math.floor(Math.random() * size)
-            this.motionInProgress = true
-            this.model.motion(group, idx, 3).then(() => {
-              if (motionId !== this.currentMotionId) return
-              this.motionInProgress = false
-              this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
-              this.eyeOpenPending = true
-              this.eyeOpenStartTime = performance.now()
-              try {
-                const cm = (this.model.internalModel as any)?.coreModel
-                this.eyeOpenStartL = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1) ?? 1
-                this.eyeOpenStartR = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1) ?? 1
-              } catch (_e) { this.eyeOpenStartL = 1; this.eyeOpenStartR = 1 }
-            }).catch((e) => {
-              console.warn('[StateMachine] Emotion motion failed:', e)
-              if (motionId === this.currentMotionId) this.reset()
-            })
-          }
-
-          // 并行播放音频
+          // 播放音频
           if (audio) {
-            const audioEl = new Audio()
-            audioEl.crossOrigin = 'anonymous'  // 必须：否则 AudioContext 读到全零
-            audioEl.src = audio  // Bridge 已转为 HTTP URL
             this.currentAudioId++
             const audioId = this.currentAudioId
+            const audioEl = new Audio()
+            audioEl.crossOrigin = 'anonymous'
+            audioEl.src = audio
             this.currentAudio = audioEl
             this.audioPlaying = true
-            audioEl.play().catch((e) => console.warn('[StateMachine] Audio play failed:', e))
-
-            // 口型同步：AudioContext → AnalyserNode
-            this.setupLipSyncAnalyser(audioEl, audioId)
-
+            audioEl.play().catch(() => {})
+            this._setupLipSync(audioEl, audioId)
             audioEl.addEventListener('loadedmetadata', () => {
               if (audioId !== this.currentAudioId) return
               if (audioEl.duration > LONG_AUDIO_THRESHOLD_SECONDS) {
                 this.longAudioActive = true
                 this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
+                this.longAudioGroup = group
               }
             })
-
             audioEl.addEventListener('ended', () => {
               if (audioId !== this.currentAudioId) return
               this.audioPlaying = false
@@ -237,61 +172,16 @@ export class Live2DStateMachine {
             })
           }
 
-          if (text) {
-            this.textBubble.value = text
-          }
-          break
-        }
-
-        case 'motion': {
-          // Pygame 发来的动作事件，只处理 Electron 自己不做的那几类
-          const { group } = event.data
-          if (!group) break
-          const emotionGroups = new Set(Object.values(EMOTION_MAP))
-          if (emotionGroups.has(group) || group === 'idle_motion' || group === 'IDLE' || group === 'text_generating' || group === 'bye') {
-            break  // Electron 自己处理，跳过防重复
-          }
-
-          // 其余：talking_motion、change_character 等跟随 Pygame
-          this.currentMotionId++
-          const motionId = this.currentMotionId
-          this.eyeOpenPending = false
-
-          const size = this.getMotionSize(group)
-          if (size <= 0) {
-            console.warn('[StateMachine] Unknown motion group from Pygame:', group)
-            break
-          }
-          const idx = Math.floor(Math.random() * size)
-          this.motionInProgress = true
-          this.model.motion(group, idx, 3).then(() => {
-            if (motionId !== this.currentMotionId) return
-            this.motionInProgress = false
-            this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
-            this.eyeOpenPending = true
-            this.eyeOpenStartTime = performance.now()
-            const cm = (this.model.internalModel as any)?.coreModel
-            this.eyeOpenStartL = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1) ?? 1
-            this.eyeOpenStartR = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1) ?? 1
-          }).catch((e) => {
-            console.warn('[StateMachine] Motion failed:', e)
-            if (motionId === this.currentMotionId) this.reset()
-          })
+          // 启动动作
+          this._playMotion(group, 3)
+          if (text) this.textBubble.value = text
           break
         }
 
         case 'text_generating': {
           const active = event.data.active === true
-          const wasThinking = this.isThinking.value
           this.isThinking.value = active
-          if (active) {
-            this.thinkInterval = THINK_INTERVAL_FIRST
-            this.lastThinkTime = now
-            // 首次进入思考状态时立即触发一次思考动作（不受 1s 间隔限制）
-            if (!wasThinking) {
-              this._triggerThinkingMotion()
-            }
-          } else {
+          if (!active) {
             this.thinkInterval = THINK_INTERVAL_FIRST
           }
           break
@@ -299,180 +189,208 @@ export class Live2DStateMachine {
 
         case 'cancel_turn': {
           this.stopAudio()
-          this.reset()
+          this.motionIsOver = true
+          this.thinkMotionIsOver = true
+          this.turnMotionComplete = true
           this.textBubble.value = '...'
+          this._resetLongAudio()
           break
         }
 
         case 'user_text': {
-          if (event.data.text) {
-            this.userBubble.value = event.data.text
-          }
+          if (event.data.text) this.userBubble.value = event.data.text
           break
         }
 
         case 'bye': {
-          // bye 动作由 Pygame 的 _emit_motion("bye") 驱动（motion 事件）
-          // 这里只设置超时关闭窗口
           this.stopAudio()
-          setTimeout(() => {
-            try {
-              ;(window as any).electronAPI?.closeWindow()
-            } catch (_e) {
-              window.close()
-            }
-          }, BYE_TIMEOUT_MS)
+          setTimeout(() => { try { (window as any).electronAPI?.closeWindow() } catch (_) { window.close() } }, BYE_TIMEOUT_MS)
+          break
+        }
+
+        // motion 事件保留兼容（对照模式下 Pygame 发来的额外动作）
+        case 'motion': {
+          const { group } = event.data
+          if (!group) break
+          // 跳过 Electron 自己处理的组
+          const emotionGroups = new Set(Object.values(EMOTION_MAP))
+          if (emotionGroups.has(group) || group === 'idle_motion' || group === 'IDLE' || group === 'text_generating' || group === 'bye') break
+          this.motionIsOver = false
+          this._playMotion(group, 3)
           break
         }
       }
     }
   }
 
-  private checkIdleRecover(now: number): void {
-    if (
-      this.motionInProgress ||
-      this.audioPlaying ||
-      this.isThinking.value ||
-      this.longAudioActive ||
-      this.idleRecoverDeadline <= 0 ||
-      now <= this.idleRecoverDeadline
-    ) {
-      return
-    }
-    // idle_motion 连续循环：播完不重置 deadline，自动再次触发（匹配 Pygame）
-    this.motionInProgress = true
-    this.model.motion('idle_motion', 0, 1).then(() => {
-      this.motionInProgress = false
-      // 不更新 idleRecoverDeadline → 下次检查自动再次触发
-    }).catch(() => { this.motionInProgress = false })
-  }
+  // ── checkThinking: 思考动作（1:1 Pygame）──
+  private checkThinking(now: number): void {
+    // Pygame: if not is_text_generating_queue.empty() and self.think_motion_is_over:
+    if (!this.isThinking.value || !this.thinkMotionIsOver) return
+    // Pygame: if time.time()-last_saved_time_think>interval_think:
+    if (now - this.lastThinkTime <= this.thinkInterval * 1000) return
 
-  private checkTimedIdle(now: number): void {
-    if (
-      this.isThinking.value ||
-      this.audioPlaying ||
-      this.longAudioActive ||
-      now - this.lastIdleTime <= TIMED_IDLE_INTERVAL_MS
-    ) {
-      return
-    }
-    // 不检查 motionInProgress — Pygame 的 IDLE 可以用同优先级打断 idle_motion
-    this.lastIdleTime = now
-    const idx = Math.floor(Math.random() * this.getMotionSize('IDLE'))
-    this.motionInProgress = true
-    this.model.motion('IDLE', idx, 1).then(() => {
-      this.motionInProgress = false
-      this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
-    }).catch((e) => {
-      console.warn('[StateMachine] Timed idle failed:', e)
-      this.motionInProgress = false
-    })
-  }
-
-  private checkThinkingMotion(now: number): void {
-    if (
-      !this.isThinking.value ||
-      now - this.lastThinkTime <= this.thinkInterval * 1000
-    ) {
-      return
-    }
-    this._triggerThinkingMotion()
-  }
-
-  private _triggerThinkingMotion(): void {
-    this.lastThinkTime = performance.now()
+    this.lastThinkTime = now
     this.thinkInterval = THINK_INTERVAL_SUBSEQUENT
-    const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))
-    this.motionInProgress = true
-    this.model.motion('text_generating', idx, 3).then(() => {
-      this.motionInProgress = false
-    }).catch((e) => {
-      console.warn('[StateMachine] Thinking motion failed:', e)
-      this.motionInProgress = false
+
+    // Pygame: onStartCallback_think_motion_version
+    this.thinkMotionIsOver = false
+
+    this._playMotion('text_generating', 3)
+  }
+
+  // ── checkIdleRecover: idle_motion 恢复（1:1 Pygame）──
+  private checkIdleRecover(now: number): void {
+    // Pygame: if self.motion_is_over and not pygame.mixer.music.get_busy():
+    if (!this.motionIsOver || this.audioPlaying) return
+    // Pygame: if is_text_generating_queue.empty() and time.time()-idle_recover_timer>2.5:
+    if (this.isThinking.value) return
+    if (now - this.idleRecoverTimer <= IDLE_RECOVER_DELAY_MS) return
+
+    // Pygame: onStartCallback（无 onFinish）
+    this.motionIsOver = false
+
+    this._playMotion('idle_motion', 1)
+  }
+
+  // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
+  private checkTimedIdle(now: number): void {
+    // Pygame: if (time.time()-last_saved_time)>25:
+    if (now - this.lastSavedTime <= TIMED_IDLE_INTERVAL_MS) return
+    // Pygame: last_saved_time = time.time()  ← 总是重置
+    this.lastSavedTime = now
+
+    // Pygame: if self.live2d_this_turn_motion_complete and is_text_generating_queue.empty():
+    if (!this.turnMotionComplete || this.isThinking.value) return
+
+    // Pygame: StartRandomMotion("IDLE",1,onStart,onFinish)
+    this.motionIsOver = false
+    this._playMotion('IDLE', 1)
+  }
+
+  // ── checkClick ──
+  private checkClick(now: number): void {
+    if (!this.mouseClicked) return
+    this.mouseClicked = false
+    this.thinkMotionIsOver = true
+    this.motionIsOver = false
+    const idx = Math.floor(Math.random() * this.getMotionSize('IDLE'))
+    this.model.motion('IDLE', idx, 1).then(() => {
+      this.motionIsOver = true
+      this.idleRecoverTimer = performance.now()
+      this._queueEyeOpen()
+    }).catch(() => { this.motionIsOver = true })
+  }
+
+  handleClick(clientX: number, width: number): void {
+    if (performance.now() - this.lastClickTime < CLICK_THROTTLE_MS) return
+    this.lastClickTime = performance.now()
+    this.mouseClicked = true
+    try {
+      const gazeParam = clientX < width / 2 ? -0.3 : 0.3
+      const cm = (this.model.internalModel as any)?.coreModel
+      const idx = cm?.getParamIndex?.('PARAM_BODY_ANGLE_X')
+      if (idx >= 0) cm?.setParamFloat?.(idx, gazeParam)
+    } catch (_) {}
+  }
+
+  // ── checkLongAudio: 长音频动作循环（1:1 Pygame）──
+  private checkLongAudioLoop(now: number): void {
+    if (!this.longAudioActive) return
+    if (!this.audioPlaying) { this._resetLongAudio(); return }
+    if (!this.motionIsOver) return
+    if (!this.longAudioGroup) { this._resetLongAudio(); return }
+    if (this.longAudioTriggeredCount >= LONG_AUDIO_MAX_REPEATS) return
+
+    if (this.longAudioNextMotionAt <= 0) {
+      this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
+      return
+    }
+    if (now < this.longAudioNextMotionAt) return
+
+    this.motionIsOver = false
+    this._playMotion(this.longAudioGroup, 3)
+    this.longAudioTriggeredCount++
+    this.longAudioNextMotionAt = 0  // 重置，下次 onFinish 后重新计时
+  }
+
+  // ── 动作播放 + 回调 ──
+  private _playMotion(group: string, priority: number): void {
+    const size = this.getMotionSize(group)
+    if (size <= 0) return
+    const idx = Math.floor(Math.random() * size)
+    this.currentMotionId++
+    const motionId = this.currentMotionId
+
+    // 确定回调行为
+    const isIdle = group === 'idle_motion'
+    const isThink = group === 'text_generating'
+
+    this.model.motion(group, idx, priority).then(() => {
+      if (motionId !== this.currentMotionId) return
+
+      if (isThink) {
+        // onFinishCallback_think_motion_version: 只设 thinkMotionIsOver，不设 motionIsOver（已在 SDK 中自动）
+        this.thinkMotionIsOver = true
+      } else if (!isIdle) {
+        // onFinishCallback: motionIsOver + idleRecoverTimer + eye
+        this.motionIsOver = true
+        this.idleRecoverTimer = performance.now()
+      } else {
+        // idle_motion: 无 onFinish → 只设 motionIsOver
+        this.motionIsOver = true
+      }
+
+      // 睁眼过渡（除 idle_motion 外都做）
+      if (!isIdle) {
+        this._queueEyeOpen()
+      }
+    }).catch(() => {
+      this.motionIsOver = true
     })
   }
 
-  private checkLongAudioLoop(now: number): void {
-    if (
-      !this.longAudioActive ||
-      this.motionInProgress ||
-      !this.audioPlaying ||
-      this.longAudioTriggeredCount >= LONG_AUDIO_MAX_REPEATS ||
-      now <= this.longAudioNextMotionAt
-    ) {
-      return
-    }
-    this.longAudioTriggeredCount++
-    this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
-    const size = this.getMotionSize(this.longAudioGroup)
-    const idx = Math.floor(Math.random() * size)
-    this.motionInProgress = true
-    this.model.motion(this.longAudioGroup, idx, 3).then(() => {
-      this.motionInProgress = false
-      this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
-    }).catch((e) => {
-      console.warn('[StateMachine] Long audio loop motion failed:', e)
-      this.motionInProgress = false
-    })
+  private _queueEyeOpen(): void {
+    this.eyeOpenPending = true
+    this.eyeOpenStartTime = performance.now()
+    try {
+      const cm = (this.model.internalModel as any)?.coreModel
+      this.eyeOpenStartL = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1) ?? 1
+      this.eyeOpenStartR = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1) ?? 1
+    } catch (_) { this.eyeOpenStartL = 1; this.eyeOpenStartR = 1 }
   }
 
   private updateEyeOpen(now: number): void {
     if (!this.eyeOpenPending) return
-
     const elapsed = now - this.eyeOpenStartTime
     if (elapsed >= EYE_OPEN_DURATION_MS) {
       this.eyeOpenPending = false
       try {
-        // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-        this.model.internalModel.setParameterValue('PARAM_EYE_L_OPEN', 1.0)
-        // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-        this.model.internalModel.setParameterValue('PARAM_EYE_R_OPEN', 1.0)
-      } catch (_e) { /* ignore */ }
+        const cm = (this.model.internalModel as any)?.coreModel
+        cm?.setParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1, 1)
+        cm?.setParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1, 1)
+      } catch (_) {}
       return
     }
-
     const t = elapsed / EYE_OPEN_DURATION_MS
-    const lerp = (start: number, end: number, factor: number) => start + (end - start) * factor
+    const lerp = (s: number, e: number, f: number) => s + (e - s) * f
     try {
-      // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-      this.model.internalModel.setParameterValue('PARAM_EYE_L_OPEN', lerp(this.eyeOpenStartL, 1.0, t))
-      // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-      this.model.internalModel.setParameterValue('PARAM_EYE_R_OPEN', lerp(this.eyeOpenStartR, 1.0, t))
-    } catch (_e) { /* ignore */ }
-  }
-
-  handleClick(clientX: number, width: number): void {
-    if (this.motionInProgress) return
-    const now = performance.now()
-    if (now - this.lastClickTime < CLICK_THROTTLE_MS) return
-    this.lastClickTime = now
-
-    // 重置思考状态
-    this.isThinking.value = false
-    this.thinkInterval = THINK_INTERVAL_FIRST
-
-    // 根据点击位置设置朝向参数
-    try {
-      const gazeParam = clientX < width / 2 ? -0.3 : 0.3
-      // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-      this.model.internalModel.setParameterValue('PARAM_BODY_ANGLE_X', gazeParam)
-    } catch (_e) { /* ignore */ }
-
-    const idx = Math.floor(Math.random() * (this.getMotionSize('IDLE')))
-    this.model.motion('IDLE', idx, 1).catch((e) => console.warn('[StateMachine] Click motion failed:', e))
+      const cm = (this.model.internalModel as any)?.coreModel
+      cm?.setParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1, lerp(this.eyeOpenStartL, 1, t))
+      cm?.setParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1, lerp(this.eyeOpenStartR, 1, t))
+    } catch (_) {}
   }
 
   reset(): void {
     this.stopAudio()
-    this.motionInProgress = false
-    this.idleRecoverDeadline = 1  // 设为过去时间，重置后立即触发 idle（不设 0）
-    this.lastIdleTime = performance.now()
+    this.motionIsOver = true
+    this.thinkMotionIsOver = true
+    this.turnMotionComplete = true
+    this.idleRecoverTimer = performance.now() - IDLE_RECOVER_DELAY_MS - 1
+    this.lastSavedTime = performance.now()
     this.lastThinkTime = 0
     this.thinkInterval = THINK_INTERVAL_FIRST
-    this.longAudioActive = false
-    this.longAudioGroup = ''
-    this.longAudioNextMotionAt = 0
-    this.longAudioTriggeredCount = 0
+    this._resetLongAudio()
     this.eyeOpenPending = false
     this.isThinking.value = false
     this.textBubble.value = null
@@ -480,77 +398,75 @@ export class Live2DStateMachine {
     this.eventQueue.length = 0
   }
 
+  private _resetLongAudio(): void {
+    this.longAudioActive = false
+    this.longAudioGroup = ''
+    this.longAudioNextMotionAt = 0
+    this.longAudioTriggeredCount = 0
+  }
+
   private stopAudio(): void {
-    if (this.currentAudio) {
-      this.currentAudio.pause()
-      this.currentAudio = null
-      this.audioPlaying = false
-    }
-    // 清理口型同步
+    if (this.currentAudio) { this.currentAudio.pause(); this.currentAudio = null; this.audioPlaying = false }
     this.mouthOpenValue = 0
-    if (this.analyserNode) {
-      try { this.analyserNode.disconnect() } catch (_e) { /* ignore */ }
-      this.analyserNode = null
-    }
+    if (this.analyserNode) { try { this.analyserNode.disconnect() } catch (_) {}; this.analyserNode = null }
   }
 
-  // ── 口型同步（Web Audio API AnalyserNode）──
-
-  /** 为音频元素创建 AnalyserNode 用于口型同步 */
-  private setupLipSyncAnalyser(audioEl: HTMLAudioElement, audioId: number): void {
+  // ── 口型同步（保持不变）──
+  private _initMouth(): void {
     try {
-      if (!this.audioContext) {
-        this.audioContext = new AudioContext()
+      const cm = (this.model.internalModel as any)?.coreModel
+      if (cm?.getParamIndex) {
+        this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
+        if (this._mouthParamIndex >= 0 && cm.update) {
+          const orig = cm.update.bind(cm)
+          const self = this
+          cm.update = function() { self._preUpdateMouth(); return orig() }
+        }
       }
-      if (this.audioContext.state === 'suspended') {
-        this.audioContext.resume()
-      }
-      // 断开旧的 analyser
-      if (this.analyserNode) {
-        try { this.analyserNode.disconnect() } catch (_e) { /* ignore */ }
-      }
-      const source = this.audioContext.createMediaElementSource(audioEl)
-      this.analyserNode = this.audioContext.createAnalyser()
-      this.analyserNode.fftSize = 256  // 小 FFT，快速响应
-      source.connect(this.analyserNode)
-      this.analyserNode.connect(this.audioContext.destination)
-      this.mouthSyncFrameCount = 0
-      console.log('[StateMachine] Lip sync analyser set up')
-    } catch (e) {
-      console.warn('[StateMachine] Lip sync setup failed:', e)
-      this.analyserNode = null
-    }
+    } catch (e) { console.error('[StateMachine] Mouth init failed:', e) }
   }
 
-  // ── 口型同步（Hook coreModel.update() 方案）──
-
-  /** 在 coreModel.update() 前调用（通过 Hook），在动作参数更新后、顶点计算前设置口型 */
   _preUpdateMouth(): void {
     if (!this.audioPlaying || !this.analyserNode || this._mouthParamIndex < 0) {
-      if (this.mouthOpenValue > 0.005) {
-        this.mouthOpenValue *= 0.85
-      } else {
-        this.mouthOpenValue = 0
-      }
+      if (this.mouthOpenValue > 0.005) this.mouthOpenValue *= 0.85; else this.mouthOpenValue = 0
       this._rawSetMouth(this.mouthOpenValue)
       return
     }
     this.mouthSyncFrameCount++
-    // 每帧更新（不再节流到每 3 帧，增加响应速度）
     try {
-      const bufferLength = this.analyserNode.fftSize
-      const dataArray = new Float32Array(bufferLength)
-      this.analyserNode.getFloatTimeDomainData(dataArray)
-      let sum = 0
-      for (let i = 0; i < bufferLength; i++) { sum += dataArray[i] * dataArray[i] }
-      const rms = Math.sqrt(sum / bufferLength)
-      this.mouthOpenValue = Math.min(1.0, rms * this.lipSyncN)
-    } catch (_e) { /* ignore */ }
+      const bl = this.analyserNode.fftSize
+      const d = new Float32Array(bl)
+      this.analyserNode.getFloatTimeDomainData(d)
+      let s = 0; for (let i = 0; i < bl; i++) s += d[i] * d[i]
+      this.mouthOpenValue = Math.min(1, Math.sqrt(s / bl) * this.lipSyncN)
+    } catch (_) {}
     this._rawSetMouth(this.mouthOpenValue)
   }
 
-  private _rawSetMouth(value: number): void {
+  private _rawSetMouth(v: number): void {
     const cm = (this.model.internalModel as any)?.coreModel
-    cm?.setParamFloat?.(this._mouthParamIndex, value)
+    cm?.setParamFloat?.(this._mouthParamIndex, v)
+  }
+
+  private _setupLipSync(audioEl: HTMLAudioElement, audioId: number): void {
+    try {
+      if (!this.audioContext) this.audioContext = new AudioContext()
+      if (this.audioContext.state === 'suspended') this.audioContext.resume()
+      if (this.analyserNode) { try { this.analyserNode.disconnect() } catch (_) {} }
+      const src = this.audioContext.createMediaElementSource(audioEl)
+      this.analyserNode = this.audioContext.createAnalyser()
+      this.analyserNode.fftSize = 256
+      src.connect(this.analyserNode)
+      this.analyserNode.connect(this.audioContext.destination)
+      this.mouthSyncFrameCount = 0
+    } catch (e) { console.warn('[StateMachine] Lip sync setup failed:', e); this.analyserNode = null }
+  }
+
+  private _initBlinkBreath(): void {
+    try {
+      const im = this.model.internalModel as any
+      if (im?.setAutoBlinkEnable) im.setAutoBlinkEnable(true)
+      if (im?.setAutoBreathEnable) im.setAutoBreathEnable(true)
+    } catch (_) {}
   }
 }
