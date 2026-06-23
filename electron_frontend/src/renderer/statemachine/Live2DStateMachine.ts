@@ -250,8 +250,7 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback（无 onFinish）
     this.motionIsOver = false
-    // idle_motion 用 IDLE[0] 固定短动画，对标原版的快速循环
-    this._playMotion('IDLE', 1, true, 0)
+    this._playMotion('IDLE', 1, true)  // noFinishReset，随机 IDLE 动画
   }
 
   // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
