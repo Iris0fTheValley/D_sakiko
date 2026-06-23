@@ -36,7 +36,7 @@ export class Live2DStateMachine {
   // 口型同步
   private mouthSyncFrameCount = 0
   private mouthOpenValue = 0
-  private lipSyncN = 1.4  // 系数，与 Pygame 一致
+  private lipSyncN = 2.8  // 系数，放大 RMS 值使口型更明显（原 Pygame 1.4 在此模型上偏小）
   private _mouthParamIndex: number = -1  // PARAM_MOUTH_OPEN_Y 的参数索引
   private audioContext: AudioContext | null = null
   private analyserNode: AnalyserNode | null = null
@@ -499,16 +499,7 @@ export class Live2DStateMachine {
   // ── 口型同步（Hook coreModel.update() 方案）──
 
   /** 在 coreModel.update() 前调用（通过 Hook），在动作参数更新后、顶点计算前设置口型 */
-  private _preUpdateDebug = 0
   _preUpdateMouth(): void {
-    // 调试：前 120 帧强制张嘴到 0.8，验证机制是否生效
-    if (++this._preUpdateDebug <= 120) {
-      this._rawSetMouth(0.8)
-      if (this._preUpdateDebug === 1) console.log('[StateMachine] DEBUG: forcing mouth to 0.8 for 120 frames')
-      return
-    }
-    if (this._preUpdateDebug === 121) console.log('[StateMachine] DEBUG: mouth force test done, switching to RMS')
-
     if (!this.audioPlaying || !this.analyserNode || this._mouthParamIndex < 0) {
       if (this.mouthOpenValue > 0.005) {
         this.mouthOpenValue *= 0.85
@@ -519,7 +510,7 @@ export class Live2DStateMachine {
       return
     }
     this.mouthSyncFrameCount++
-    if (this.mouthSyncFrameCount % 3 !== 0) return
+    // 每帧更新（不再节流到每 3 帧，增加响应速度）
     try {
       const bufferLength = this.analyserNode.fftSize
       const dataArray = new Float32Array(bufferLength)
