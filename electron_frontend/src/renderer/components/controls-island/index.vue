@@ -8,6 +8,9 @@ import ControlButton from './control-button.vue'
 declare const electronAPI: {
   toggleDevTools: () => Promise<boolean>
   toggleAlwaysOnTop: () => Promise<boolean>
+  setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
+  getMousePosition: () => Promise<{ x: number, y: number }>
+  getWindowBounds: () => Promise<{ x: number, y: number, width: number, height: number }>
 }
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -40,7 +43,7 @@ defineExpose({
 })
 
 const { isOutside } = (() => {
-  const isOutside = ref(false)
+  const isOutside = ref(true)
   const handler = (e: MouseEvent) => {
     if (!islandRef.value) return
     const rect = islandRef.value.getBoundingClientRect()
@@ -68,16 +71,45 @@ useIntervalFn(() => {
 }, 1500)
 
 const alwaysOnTop = ref(true)
-
 async function toggleAlwaysOnTop() {
-  try {
-    const result = await electronAPI.toggleAlwaysOnTop()
-    alwaysOnTop.value = result
-  } catch { alwaysOnTop.value = !alwaysOnTop.value }
+  try { const r = await electronAPI.toggleAlwaysOnTop(); alwaysOnTop.value = r } catch { alwaysOnTop.value = !alwaysOnTop.value }
 }
 
 const fadeOnHover = inject<ReturnType<typeof ref<boolean>>>('fadeOnHoverEnabled', ref(false))
 const toggleFadeOnHover = inject<() => void>('toggleFadeOnHover', () => {})
+
+// ── 鼠标穿透（照搬 airi 逻辑）──
+// fadeOnHover ON + 鼠标在面板外 → 穿透；鼠标在面板内或面板展开 → 不穿透
+let _pollTimer: ReturnType<typeof setInterval> | null = null
+const _cursorInsideIsland = ref(false)
+const isOutsideFor250Ms = refDebounced(computed(() => !_cursorInsideIsland.value || isOutside.value), 250)
+
+async function syncPenetrate() {
+  const on = !!fadeOnHover.value && !expanded.value && isOutsideFor250Ms.value
+  try { await electronAPI.setIgnoreMouseEvents(on, { forward: true }) } catch {}
+}
+
+watch([fadeOnHover, expanded, isOutsideFor250Ms], syncPenetrate)
+
+// IPC 轮询鼠标位置（穿透后 renderer mousemove 不触发）
+watch(fadeOnHover, (on) => {
+  if (on) {
+    _pollTimer = setInterval(async () => {
+      try {
+        const [pos, bounds] = await Promise.all([electronAPI.getMousePosition(), electronAPI.getWindowBounds()])
+        const el = islandRef.value
+        if (!el || !bounds) return
+        const r = el.getBoundingClientRect()
+        _cursorInsideIsland.value = pos.x >= bounds.x + r.left && pos.x <= bounds.x + r.right
+                                 && pos.y >= bounds.y + r.top && pos.y <= bounds.y + r.bottom
+      } catch {}
+    }, 150)
+  } else {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
+    // 关闭时确保恢复交互
+    electronAPI.setIgnoreMouseEvents(false, { forward: true })
+  }
+})
 
 const adjustStyleClasses = computed(() => {
   const icon = 'size-5'
@@ -87,16 +119,12 @@ const adjustStyleClasses = computed(() => {
 })
 
 function refreshWindow() { window.location.reload() }
-
-async function toggleDevToolsHandler() {
-  try { await electronAPI.toggleDevTools() } catch { /* dev mode only */ }
-}
-
+async function toggleDevToolsHandler() { try { await electronAPI.toggleDevTools() } catch {} }
 function closeWindow() { window.close() }
 </script>
 
 <template>
-  <div ref="islandRef" fixed bottom-2 right-2 class="pointer-events-auto" style="pointer-events: auto">
+  <div ref="islandRef" fixed bottom-2 right-2>
     <div flex flex-col items-end gap-1>
       <Transition
         enter-active-class="transition-all duration-500 cubic-bezier(0.32, 0.72, 0, 1)"
@@ -112,28 +140,24 @@ function closeWindow() { window.close() }
               </ControlButton>
               <template #tooltip>设置</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button">
                 <div i-solar:emoji-funny-square-broken :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
               </ControlButton>
               <template #tooltip>切换角色</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" @click="toggleDevToolsHandler">
                 <div i-solar:code-bold-duotone :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
               </ControlButton>
               <template #tooltip>Vue DevTools</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" @click="refreshWindow">
                 <div i-solar:refresh-linear :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
               </ControlButton>
               <template #tooltip>刷新窗口</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" @click="toggleDark()">
                 <Transition name="fade" mode="out-in">
@@ -143,7 +167,6 @@ function closeWindow() { window.close() }
               </ControlButton>
               <template #tooltip>{{ isDark ? '切换亮色模式' : '切换暗色模式' }}</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" @click="toggleAlwaysOnTop()">
                 <div v-if="alwaysOnTop" i-solar:pin-bold :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
@@ -151,7 +174,6 @@ function closeWindow() { window.close() }
               </ControlButton>
               <template #tooltip>{{ alwaysOnTop ? '取消置顶' : '窗口置顶' }}</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton
                 :button-style="adjustStyleClasses.button"
@@ -165,7 +187,6 @@ function closeWindow() { window.close() }
               </ControlButton>
               <template #tooltip>{{ fadeOnHover ? '禁用悬停隐藏' : '启用悬停隐藏' }}</template>
             </ControlButtonTooltip>
-
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" hover:bg-red-500 hover:text-white @click="closeWindow()">
                 <div i-solar:close-circle-outline :class="adjustStyleClasses.icon" />
@@ -187,14 +208,12 @@ function closeWindow() { window.close() }
           </ControlButton>
           <template #tooltip>{{ expanded ? '收起' : '展开' }}</template>
         </ControlButtonTooltip>
-
         <ControlButtonTooltip side="left">
           <ControlButton :button-style="adjustStyleClasses.button">
             <div i-ph:microphone-slash :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
           </ControlButton>
           <template #tooltip>语音配置</template>
         </ControlButtonTooltip>
-
         <ControlButtonTooltip side="left">
           <ControlButton :button-style="adjustStyleClasses.button" cursor-move style="-webkit-app-region: drag">
             <div i-ph:arrows-out-cardinal :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />

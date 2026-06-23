@@ -13,6 +13,9 @@ const api = {
   getMousePosition: () =>
     ipcRenderer.invoke('get-mouse-position'),
 
+  getWindowBounds: () =>
+    ipcRenderer.invoke('get-window-bounds'),
+
   toggleAlwaysOnTop: () =>
     ipcRenderer.invoke('toggle-always-on-top'),
 }

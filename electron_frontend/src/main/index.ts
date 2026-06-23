@@ -75,6 +75,10 @@ function createWindow() {
     return { x: p.x, y: p.y }
   })
 
+  ipcMain.handle('get-window-bounds', () => {
+    return mainWindow?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 }
+  })
+
   // 置顶
   ipcMain.handle('toggle-always-on-top', () => {
     if (!mainWindow) return false
