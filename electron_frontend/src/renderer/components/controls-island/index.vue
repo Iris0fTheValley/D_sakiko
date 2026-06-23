@@ -80,8 +80,8 @@ async function toggleAlwaysOnTop() {
 const fadeOnHover = ref(false)
 
 async function applyMouseThrough() {
-  // 面板展开时不穿透（保持按钮可点击）
-  const ignore = fadeOnHover.value && !expanded.value && !isOverIsland.value
+  // 鼠标在面板上或面板展开时不穿透
+  const ignore = fadeOnHover.value && !expanded.value && isOutside.value
   try { await electronAPI.setIgnoreMouseEvents(ignore, { forward: true }) } catch {}
 }
 
@@ -90,14 +90,8 @@ async function toggleFadeOnHover() {
   await applyMouseThrough()
 }
 
-// 鼠标是否在控制面板区域内
-const isOverIsland = ref(false)
-
-function onIslandEnter() { isOverIsland.value = true; if (fadeOnHover.value) applyMouseThrough() }
-function onIslandLeave() { isOverIsland.value = false; if (fadeOnHover.value) applyMouseThrough() }
-
-// 面板展开/收起时重新应用穿透状态
-watch(expanded, () => { if (fadeOnHover.value) applyMouseThrough() })
+// 鼠标位置变化时（isOutside 由全局 mousemove 追踪）重新判断穿透
+watch([isOutside, expanded], () => { if (fadeOnHover.value) applyMouseThrough() })
 
 const adjustStyleClasses = computed(() => {
   const icon = 'size-5'
@@ -116,7 +110,7 @@ function closeWindow() { window.close() }
 </script>
 
 <template>
-  <div ref="islandRef" fixed bottom-2 right-2 @mouseenter="onIslandEnter" @mouseleave="onIslandLeave">
+  <div ref="islandRef" fixed bottom-2 right-2>
     <div flex flex-col items-end gap-1>
       <Transition
         enter-active-class="transition-all duration-500 cubic-bezier(0.32, 0.72, 0, 1)"
