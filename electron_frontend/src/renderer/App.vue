@@ -56,8 +56,8 @@ function connectWebSocket(sm: Live2DStateMachine) {
       // char_converted: 黑白祥 / mask
       if (msg.type === 'char_converted') {
         const v = msg.data?.value
-        if (v === 0) { reloadModel('sakiko', false); return }
-        if (v === 1) { reloadModel('sakiko', true); return }
+        if (v === false || v === 0) { reloadModel('sakiko', false); return }
+        if (v === true || v === 1) { reloadModel('sakiko', true); return }
       }
       sm.pushEvent({ type: msg.type, data: msg.data })
     } catch(e) { console.warn('[WS] Parse:', e) }
