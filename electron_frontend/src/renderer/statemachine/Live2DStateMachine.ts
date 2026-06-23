@@ -330,8 +330,9 @@ export class Live2DStateMachine {
       if (motionId !== this.currentMotionId) return
 
       if (isThink) {
-        // onFinishCallback_think_motion_version: 只设 thinkMotionIsOver，不设 motionIsOver（已在 SDK 中自动）
+        // onFinishCallback_think_motion_version: 设两个标志位
         this.thinkMotionIsOver = true
+        this.motionIsOver = true  // 被打断的 idle_motion 的 onFinish 不会触发，这里补上
       } else if (!isIdle) {
         // onFinishCallback: motionIsOver + idleRecoverTimer + eye
         this.motionIsOver = true
