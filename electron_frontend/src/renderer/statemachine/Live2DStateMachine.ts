@@ -240,14 +240,17 @@ export class Live2DStateMachine {
         }
 
         case 'motion': {
-          // motion 事件保留兼容（对照模式时 Pygame _emit_motion 发来）
+          // Pygame 发来的动作事件，只处理 Electron 自己不做的那几类
           const { group } = event.data
           if (!group) break
+          const emotionGroups = new Set(Object.values(EMOTION_MAP))
+          if (emotionGroups.has(group) || group === 'idle_motion' || group === 'IDLE' || group === 'text_generating' || group === 'bye') {
+            break  // Electron 自己处理，跳过防重复
+          }
 
+          // 其余：talking_motion、change_character 等跟随 Pygame
           this.currentMotionId++
           const motionId = this.currentMotionId
-
-          // 停止正在进行的睁眼过渡（Pygame onStartCallback 行为）
           this.eyeOpenPending = false
 
           const size = this.getMotionSize(group)
@@ -256,35 +259,19 @@ export class Live2DStateMachine {
             break
           }
           const idx = Math.floor(Math.random() * size)
-
           this.motionInProgress = true
-          const motionPromise = this.model.motion(group, idx, 3)
-
-          // 更新长音频 group（音频由 emotion 事件启动时标记）
-          if (this.longAudioActive && group !== 'idle_motion' && group !== 'IDLE') {
-            this.longAudioGroup = group
-          }
-
-          motionPromise.then(() => {
+          this.model.motion(group, idx, 3).then(() => {
             if (motionId !== this.currentMotionId) return
             this.motionInProgress = false
             this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
             this.eyeOpenPending = true
             this.eyeOpenStartTime = performance.now()
-            try {
-              // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-              this.eyeOpenStartL = this.model.internalModel.getParameterValue('PARAM_EYE_L_OPEN')
-              // @ts-expect-error internalModel API not fully typed by pixi-live2d-display
-              this.eyeOpenStartR = this.model.internalModel.getParameterValue('PARAM_EYE_R_OPEN')
-            } catch (_e) {
-              this.eyeOpenStartL = 1.0
-              this.eyeOpenStartR = 1.0
-            }
+            const cm = (this.model.internalModel as any)?.coreModel
+            this.eyeOpenStartL = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1) ?? 1
+            this.eyeOpenStartR = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1) ?? 1
           }).catch((e) => {
             console.warn('[StateMachine] Motion failed:', e)
-            if (motionId === this.currentMotionId) {
-              this.reset()
-            }
+            if (motionId === this.currentMotionId) this.reset()
           })
           break
         }
