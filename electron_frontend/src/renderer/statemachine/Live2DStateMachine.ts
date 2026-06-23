@@ -164,7 +164,7 @@ export class Live2DStateMachine {
 
           // 并行播放音频
           if (audio) {
-            const audioEl = new Audio(audio)  # Bridge 已转为 HTTP URL
+            const audioEl = new Audio(audio)  // Bridge 已转为 HTTP URL
             this.currentAudioId++
             const audioId = this.currentAudioId
             this.currentAudio = audioEl
