@@ -141,8 +141,10 @@ onUnmounted(() => disconnectWebSocket())
     <ResizeHandler />
     <ControlsIsland />
 
-    <!-- DEBUG: test CSS rendering -->
-    <div class="pointer-events-none fixed inset-0 z-999"><div class="h-full w-full border-4 border-lime-400 rounded-2xl"></div></div>
+    <!-- DEBUG -->
+    <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999; pointer-events: none;">
+      <div style="width: 100%; height: 100%; border: 4px solid lime; border-radius: 1rem;"></div>
+    </div>
   </div>
 </template>
 
