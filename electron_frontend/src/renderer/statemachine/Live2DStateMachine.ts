@@ -272,7 +272,9 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback（无 onFinish）
     this.motionIsOver = false
-    this._playMotion('IDLE', 1)  // TEST: IDLE 有 7 个动作
+    // idle_motion 只有 1 个动作，但 IDLE 有 7 个：都试一下
+    const group = Math.random() < 0.5 ? 'idle_motion' : 'IDLE'
+    this._playMotion(group, 1)
   }
 
   // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
