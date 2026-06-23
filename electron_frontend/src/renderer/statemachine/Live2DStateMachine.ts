@@ -110,9 +110,7 @@ export class Live2DStateMachine {
   }
 
   // ── 主循环：每帧由 Ticker 调用 ──
-  private _dbgFrame = 0
   private onTickerUpdate(): void {
-    this._dbgFrame++
     const now = performance.now()
     this.processEvents(now)
     this.checkThinking(now)
@@ -122,14 +120,6 @@ export class Live2DStateMachine {
     this.turnMotionComplete = !this.audioPlaying
     this.checkLongAudioLoop(now)
     this.updateEyeOpen(now)
-    // 每秒打印一次状态
-    if (this._dbgFrame % 60 === 1) {
-      console.log('[SM] f:', this._dbgFrame,
-        'mOver:', this.motionIsOver, 'tOver:', this.thinkMotionIsOver,
-        'audio:', this.audioPlaying, 'thinking:', this.isThinking.value,
-        'idleRecover:', (now - this.idleRecoverTimer).toFixed(0) + 'ms',
-        'lastSaved:', (now - this.lastSavedTime).toFixed(0) + 'ms')
-    }
   }
 
   // ── processEvents: 消费 WS 事件队列 ──
@@ -272,9 +262,8 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback（无 onFinish）
     this.motionIsOver = false
-    // idle_motion 只有 1 个动作，但 IDLE 有 7 个：都试一下
-    const group = Math.random() < 0.5 ? 'idle_motion' : 'IDLE'
-    this._playMotion(group, 1)
+    // idle_motion 动画文件无效，用 IDLE 替代（noFinishReset 防重置定时器）
+    this._playMotion('IDLE', 1, true)
   }
 
   // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
@@ -339,43 +328,33 @@ export class Live2DStateMachine {
   }
 
   // ── 动作播放 + 回调 ──
-  private _playMotion(group: string, priority: number): void {
+  private _playMotion(group: string, priority: number, noFinishReset?: boolean): void {
     const size = this.getMotionSize(group)
-    if (size <= 0) { console.warn('[SM] _playMotion: unknown group', group); return }
+    if (size <= 0) return
     const idx = Math.floor(Math.random() * size)
     this.currentMotionId++
     const motionId = this.currentMotionId
-    console.log('[SM] _playMotion:', group, 'idx:', idx, 'pri:', priority, 'id:', motionId)
 
-    // 确定回调行为
-    const isIdle = group === 'idle_motion'
+    const isIdleLike = noFinishReset === true
     const isThink = group === 'text_generating'
 
-    const p = this.model.motion(group, idx, priority)
-    console.log('[SM] motion promise:', group, 'isPromise:', p instanceof Promise, 'thenable:', typeof p?.then)
-    p.then(() => {
-      console.log('[SM] motion completed:', group, 'id:', motionId)
+    this.model.motion(group, idx, priority).then(() => {
       if (motionId !== this.currentMotionId) return
 
-      if (isThink) {
-        // onFinishCallback_think_motion_version: 设两个标志位
+      if (isIdleLike) {
+        this.motionIsOver = true
+      } else if (isThink) {
         this.thinkMotionIsOver = true
-        this.motionIsOver = true  // 被打断的 idle_motion 的 onFinish 不会触发，这里补上
-      } else if (!isIdle) {
-        // onFinishCallback: motionIsOver + idleRecoverTimer + eye
+        this.motionIsOver = true
+      } else {
         this.motionIsOver = true
         this.idleRecoverTimer = performance.now()
-      } else {
-        // idle_motion: 无 onFinish → 只设 motionIsOver
-        this.motionIsOver = true
       }
 
-      // 睁眼过渡（除 idle_motion 外都做）
-      if (!isIdle) {
+      if (!isIdleLike) {
         this._queueEyeOpen()
       }
-    }).catch((e) => {
-      console.error('[SM] motion FAILED:', group, e)
+    }).catch(() => {
       this.motionIsOver = true
     })
   }
