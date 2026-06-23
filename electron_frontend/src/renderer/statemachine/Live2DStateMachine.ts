@@ -94,7 +94,8 @@ export class Live2DStateMachine {
   /** 从外部（useWebSocket）推入事件 */
   pushEvent(event: StateMachineEvent): void {
     if (!this.modelLoaded) {
-      console.warn('[StateMachine] Event ignored: model not loaded')
+      // 缓冲事件，模型加载后重放（避免切换角色时丢失事件）
+      this.eventQueue.push(event)
       return
     }
     this.eventQueue.push(event)
