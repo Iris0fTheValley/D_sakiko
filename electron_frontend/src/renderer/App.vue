@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { shallowRef, ref, onUnmounted, computed, onMounted, provide } from 'vue'
+import { refDebounced } from '@vueuse/core'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
@@ -37,12 +38,31 @@ const isOverModel = computed(() => {
 })
 const shouldFade = computed(() => fadeOnHoverEnabled.value && isOverModel.value)
 
+// ── 窗口边框高亮（airi border highlight）──
+const _nearBorder = ref(false)
+const nearBorder = refDebounced(_nearBorder, 250)
+
 onMounted(() => {
+  // 悬停淡出鼠标追踪
   window.addEventListener('mousemove', (e) => {
     mouseX.value = e.clientX; mouseY.value = e.clientY
   })
   document.addEventListener('mouseleave', () => { mouseInWindow.value = false })
   document.addEventListener('mouseenter', () => { mouseInWindow.value = true })
+
+  // 边框高亮鼠标追踪
+  setInterval(async () => {
+    try {
+      const pos = await (window as any).electronAPI?.getMousePosition()
+      const bounds = await (window as any).electronAPI?.getWindowBounds()
+      if (!pos || !bounds) return
+      const rx = pos.x - bounds.x
+      const ry = pos.y - bounds.y
+      const t = 10
+      _nearBorder.value = rx >= -t && rx <= bounds.width + t && ry >= -t && ry <= bounds.height + t
+        && (rx <= t || rx >= bounds.width - t || ry <= t || ry >= bounds.height - t)
+    } catch {}
+  }, 200)
 })
 
 function toggleFadeOnHover() {
@@ -120,6 +140,20 @@ onUnmounted(() => disconnectWebSocket())
     <Transition name="fade"><div v-if="isThinking" class="thinking-indicator">思考中...</div></Transition>
     <ResizeHandler />
     <ControlsIsland />
+
+    <!-- 窗口边框高亮（airi border highlight）-->
+    <Transition
+      enter-active-class="transition-opacity duration-250 ease-in-out"
+      enter-from-class="opacity-50"
+      enter-to-class="opacity-100"
+      leave-active-class="transition-opacity duration-250 ease-in-out"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-50"
+    >
+      <div v-if="nearBorder" class="pointer-events-none fixed inset-0 z-999">
+        <div class="h-full w-full border-4 border-primary/50 rounded-2xl animate-pulse" />
+      </div>
+    </Transition>
   </div>
 </template>
 
