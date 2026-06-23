@@ -20,7 +20,7 @@ export const MOTION_GROUP_SIZES: Record<string, number> = {
   fear: 2,
   IDLE: 7,
   text_generating: 4,
-  bye: 2,
+  bye: 1,
   change_character: 3,
   idle_motion: 1,
   talking_motion: 1,

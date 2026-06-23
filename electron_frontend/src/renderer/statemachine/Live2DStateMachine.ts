@@ -51,6 +51,9 @@ export class Live2DStateMachine {
   private longAudioNextMotionAt = 0
   private longAudioTriggeredCount = 0
 
+  // ── 外部动作驱动模式（Pygame _emit_motion 接管时禁用内置 Ticker 检查）──
+  private externalMotionDriver = false
+
   // ── 睁眼过渡 ──
   private eyeOpenPending = false
   private eyeOpenStartTime = 0
@@ -92,10 +95,13 @@ export class Live2DStateMachine {
   private onTickerUpdate(): void {
     const now = performance.now()
     this.processEvents(now)
-    this.checkIdleRecover(now)
-    this.checkTimedIdle(now)
-    this.checkThinkingMotion(now)
-    this.checkLongAudioLoop(now)
+    // 外部动作驱动模式（Pygame _emit_motion 接管）：跳过内置空闲/思考/长音频检查
+    if (!this.externalMotionDriver) {
+      this.checkIdleRecover(now)
+      this.checkTimedIdle(now)
+      this.checkThinkingMotion(now)
+      this.checkLongAudioLoop(now)
+    }
     this.updateEyeOpen(now)
   }
 
@@ -155,13 +161,22 @@ export class Live2DStateMachine {
 
         case 'motion': {
           // motion 事件来自 Pygame 的 _emit_motion：{ group, priority, timestamp }
+          // 首次收到即切换为外部动作驱动模式，禁用 Electron 内置空闲/思考检查
+          if (!this.externalMotionDriver) {
+            this.externalMotionDriver = true
+            console.log('[StateMachine] External motion driver mode (Pygame _emit_motion)')
+          }
           const { group, priority } = event.data
           if (!group) break
 
           this.currentMotionId++
           const motionId = this.currentMotionId
 
-          const size = MOTION_GROUP_SIZES[group] ?? 1
+          const size = MOTION_GROUP_SIZES[group]
+          if (size === undefined) {
+            console.warn('[StateMachine] Unknown motion group from Pygame:', group)
+            break
+          }
           const idx = Math.floor(Math.random() * size)
 
           this.motionInProgress = true
