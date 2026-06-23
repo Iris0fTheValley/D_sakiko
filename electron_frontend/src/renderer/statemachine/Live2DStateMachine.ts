@@ -113,12 +113,7 @@ export class Live2DStateMachine {
   private onTickerUpdate(): void {
     const now = performance.now()
     this.processEvents(now)
-    this.checkThinking(now)
-    this.checkIdleRecover(now)
-    this.checkTimedIdle(now)
-    this.checkClick(now)
     this.turnMotionComplete = !this.audioPlaying
-    this.checkLongAudioLoop(now)
     this.updateEyeOpen(now)
   }
 
@@ -128,25 +123,12 @@ export class Live2DStateMachine {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
-          const { label, audio, text } = event.data
-          if (label === 'bye') {
-            this._resetLongAudio()
-            if (!this.ifBye) {
-              this.motionIsOver = false
-              this._playMotion('bye', 3)
-            }
-            this.ifBye = true
-            setTimeout(() => { try { (window as any).electronAPI?.closeWindow() } catch (_) { window.close() } }, BYE_TIMEOUT_MS)
-            break
-          }
-          const group = EMOTION_MAP[label]
-          if (!group) break
+          // emotion 事件：只处理文本和音频，动作完全由 Pygame 的 _emit_motion 驱动
+          const { audio, text } = event.data
 
+          this.stopAudio()
           this._resetLongAudio()
-          this.motionIsOver = false
-          this.thinkMotionIsOver = true  // Pygame: 放在这里就对了
 
-          // 播放音频
           if (audio) {
             this.currentAudioId++
             const audioId = this.currentAudioId
@@ -162,7 +144,7 @@ export class Live2DStateMachine {
               if (audioEl.duration > LONG_AUDIO_THRESHOLD_SECONDS) {
                 this.longAudioActive = true
                 this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
-                this.longAudioGroup = group
+                // group 由后续 Pygame motion 事件提供
               }
             })
             audioEl.addEventListener('ended', () => {
@@ -172,8 +154,6 @@ export class Live2DStateMachine {
             })
           }
 
-          // 启动动作
-          this._playMotion(group, 3)
           if (text) this.textBubble.value = text
           break
         }
@@ -210,11 +190,9 @@ export class Live2DStateMachine {
 
         // motion 事件保留兼容（对照模式下 Pygame 发来的额外动作）
         case 'motion': {
+          // Pygame _emit_motion 驱动所有动作（不跳过任何组）
           const { group } = event.data
           if (!group) break
-          // 跳过 Electron 自己处理的组
-          const emotionGroups = new Set(Object.values(EMOTION_MAP))
-          if (emotionGroups.has(group) || group === 'idle_motion' || group === 'IDLE' || group === 'text_generating' || group === 'bye') break
           this.motionIsOver = false
           this._playMotion(group, 3)
           break
