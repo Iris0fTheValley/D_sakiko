@@ -212,26 +212,12 @@ export class Live2DStateMachine {
           break
         }
 
-        // motion 事件保留兼容（对照模式下 Pygame 发来的额外动作）
-        case 'expression': {
-          // Pygame SetExpression 事件
-          const { name } = event.data
-          if (name) {
-            try { this.model.expression(name) } catch (_) {}
-          }
-          break
-        }
-
-        case 'motion': {
-          // Pygame _emit_motion 事件：只处理 talking/change/Mask 等额外组
-          const { group } = event.data
-          console.log('[SM] motion:', group)
-          if (!group) break
-          const emotionGroups = new Set(Object.values(EMOTION_MAP))
-          const builtIn = new Set(['idle_motion', 'IDLE', 'text_generating', 'bye'])
-          if (emotionGroups.has(group) || builtIn.has(group)) break
+        case 'switch_live2d': {
+          // Qt 切换对话 → Electron 播放 change_character 动作
+          this._resetLongAudio()
           this.motionIsOver = false
-          this._playMotion(group, 3)
+          this.thinkMotionIsOver = true
+          this._playMotion('change_character', 3)
           break
         }
       }
