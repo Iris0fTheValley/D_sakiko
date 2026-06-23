@@ -2,7 +2,7 @@ import { ref, type Ref } from 'vue'
 import type { Live2DModel } from 'pixi-live2d-display'
 import type { Ticker } from 'pixi.js'
 import {
-  EMOTION_MAP, MOTION_GROUP_SIZES,
+  EMOTION_MAP, MOTION_GROUP_SIZES, MODEL_SPECIFIC_SIZES,
   LONG_AUDIO_THRESHOLD_SECONDS, LONG_AUDIO_REPEAT_DELAY_SECONDS, LONG_AUDIO_MAX_REPEATS,
   IDLE_RECOVER_DELAY_MS, TIMED_IDLE_INTERVAL_MS,
   THINK_INTERVAL_FIRST, THINK_INTERVAL_SUBSEQUENT,
@@ -60,10 +60,19 @@ export class Live2DStateMachine {
   private eyeOpenStartL = 1.0
   private eyeOpenStartR = 1.0
 
-  constructor(model: Live2DModel, ticker: Ticker) {
+  // ── 角色 key（用于查找模型专属动作组数量）──
+  private modelKey: string = 'sakiko'
+
+  constructor(model: Live2DModel, ticker: Ticker, modelKey?: string) {
     this.model = model
     this.ticker = ticker
+    if (modelKey) this.modelKey = modelKey
     this.tickerCallback = () => this.onTickerUpdate()
+  }
+
+  /** 获取当前模型的动作组数量 */
+  private getMotionSize(group: string): number {
+    return MODEL_SPECIFIC_SIZES[this.modelKey]?.[group] ?? MOTION_GROUP_SIZES[group] ?? 1
   }
 
   /** 注册 Ticker 回调，开始运行 */
@@ -172,8 +181,8 @@ export class Live2DStateMachine {
           this.currentMotionId++
           const motionId = this.currentMotionId
 
-          const size = MOTION_GROUP_SIZES[group]
-          if (size === undefined) {
+          const size = this.getMotionSize(group)
+          if (size <= 0) {
             console.warn('[StateMachine] Unknown motion group from Pygame:', group)
             break
           }
@@ -281,7 +290,7 @@ export class Live2DStateMachine {
       return
     }
     this.lastIdleTime = now
-    const idx = Math.floor(Math.random() * (MOTION_GROUP_SIZES['IDLE'] ?? 7))
+    const idx = Math.floor(Math.random() * (this.getMotionSize('IDLE')))
     this.model.motion('IDLE', idx, 1).then(() => {
       this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
     }).catch((e) => console.warn('[StateMachine] Timed idle failed:', e))
@@ -297,7 +306,7 @@ export class Live2DStateMachine {
     }
     this.lastThinkTime = now
     this.thinkInterval = THINK_INTERVAL_SUBSEQUENT  // 立即切换为 15s，不等动作播完
-    const idx = Math.floor(Math.random() * (MOTION_GROUP_SIZES['text_generating'] ?? 4))
+    const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))
     this.model.motion('text_generating', idx, 3).then(() => {
       this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
     }).catch((e) => console.warn('[StateMachine] Thinking motion failed:', e))
@@ -315,7 +324,7 @@ export class Live2DStateMachine {
     }
     this.longAudioTriggeredCount++
     this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
-    const size = MOTION_GROUP_SIZES[this.longAudioGroup] ?? 1
+    const size = this.getMotionSize(this.longAudioGroup)
     const idx = Math.floor(Math.random() * size)
     this.motionInProgress = true
     this.model.motion(this.longAudioGroup, idx, 3).then(() => {
@@ -369,7 +378,7 @@ export class Live2DStateMachine {
       this.model.internalModel.setParameterValue('PARAM_BODY_ANGLE_X', gazeParam)
     } catch (_e) { /* ignore */ }
 
-    const idx = Math.floor(Math.random() * (MOTION_GROUP_SIZES['IDLE'] ?? 7))
+    const idx = Math.floor(Math.random() * (this.getMotionSize('IDLE')))
     this.model.motion('IDLE', idx, 1).catch((e) => console.warn('[StateMachine] Click motion failed:', e))
   }
 

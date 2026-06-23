@@ -26,6 +26,22 @@ export const MOTION_GROUP_SIZES: Record<string, number> = {
   talking_motion: 1,
 }
 
+/** 按角色适配的动作组数量 */
+export const MODEL_SPECIFIC_SIZES: Record<string, Record<string, number>> = {
+  sakiko: {
+    happiness: 6, sadness: 4, anger: 7, disgust: 2, like: 4, surprise: 4, fear: 2,
+    IDLE: 7, text_generating: 4, bye: 1, change_character: 3, idle_motion: 1, talking_motion: 1,
+  },
+  anon: {
+    happiness: 6, sadness: 6, anger: 6, disgust: 6, like: 6, surprise: 6, fear: 6,
+    IDLE: 9, text_generating: 3, bye: 2, change_character: 3, idle_motion: 1, talking_motion: 1,
+  },
+  soyo: {
+    happiness: 6, sadness: 6, anger: 6, disgust: 6, like: 6, surprise: 6, fear: 6,
+    IDLE: 9, text_generating: 3, bye: 2, change_character: 3, idle_motion: 1, talking_motion: 1,
+  },
+}
+
 /** 长音频运动循环参数 */
 export const LONG_AUDIO_THRESHOLD_SECONDS = 6.0
 export const LONG_AUDIO_REPEAT_DELAY_SECONDS = 1.5

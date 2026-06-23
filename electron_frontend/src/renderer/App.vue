@@ -8,6 +8,24 @@ import type { Live2DStateMachine } from './statemachine/Live2DStateMachine'
 const stateMachine = shallowRef<Live2DStateMachine | null>(null)
 const wsConnected = ref(false)
 
+// ── 角色选择 ──
+const characters = [
+  { name: '祥子', key: 'sakiko', path: '/live2d/sakiko/live2D_model/3.model.json' },
+  { name: '爱音', key: 'anon', path: '/live2d/anon/live2D_model/3.model.json' },
+  { name: '素世', key: 'soyo', path: '/live2d/soyo/live2D_model/3.model.json' },
+]
+const currentCharKey = ref('sakiko')
+const currentModelPath = computed(() => characters.find(c => c.key === currentCharKey.value)?.path)
+const stageKey = ref(0)  // 切换角色时递增，强制重建 Live2DStage
+
+function switchCharacter(key: string) {
+  if (key === currentCharKey.value) return
+  stateMachine.value?.destroy()
+  stateMachine.value = null
+  currentCharKey.value = key
+  stageKey.value++
+}
+
 // 将状态机的响应式属性映射到模板可直接使用的 computed
 const textBubble = computed(() => stateMachine.value?.textBubble.value ?? null)
 const userBubble = computed(() => stateMachine.value?.userBubble.value ?? null)
@@ -95,7 +113,7 @@ onUnmounted(() => {
 <template>
   <div class="app-root">
     <div class="stage-area">
-      <Live2DStage @state-machine-ready="onStateMachineReady" />
+      <Live2DStage :key="stageKey" :model-path="currentModelPath" :model-key="currentCharKey" @state-machine-ready="onStateMachineReady" />
     </div>
 
     <Transition name="fade">
@@ -117,6 +135,16 @@ onUnmounted(() => {
     </Transition>
 
     <ResizeHandler />
+
+    <div class="char-selector">
+      <button
+        v-for="c in characters"
+        :key="c.key"
+        :class="{ active: currentCharKey === c.key }"
+        @click="switchCharacter(c.key)"
+      >{{ c.name }}</button>
+    </div>
+
     <ControlsIsland />
   </div>
 </template>
@@ -176,5 +204,33 @@ onUnmounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.char-selector {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  display: flex;
+  gap: 0.25rem;
+  z-index: 10;
+}
+.char-selector button {
+  padding: 0.2rem 0.5rem;
+  font-size: 12px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 0.375rem;
+  background: rgba(38, 38, 38, 0.6);
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.char-selector button:hover {
+  background: rgba(38, 38, 38, 0.9);
+  color: #fff;
+}
+.char-selector button.active {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.6);
+  color: #60a5fa;
 }
 </style>

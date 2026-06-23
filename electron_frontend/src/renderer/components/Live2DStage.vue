@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import type { Application, Ticker } from 'pixi.js'
 import { Live2DStateMachine } from '../statemachine/Live2DStateMachine'
 
-const props = defineProps<{ modelPath?: string }>()
+const props = defineProps<{ modelPath?: string; modelKey?: string }>()
 const emit = defineEmits<{ stateMachineReady: [sm: Live2DStateMachine] }>()
 
 const canvasContainer = ref<HTMLDivElement>()
@@ -48,7 +48,8 @@ onMounted(async () => {
     app.stage.addChild(live2dModel)
 
     // 创建状态机并启动
-    sm = new Live2DStateMachine(live2dModel, Ticker.shared)
+    const key = props.modelKey || 'sakiko'
+    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key)
     sm.start()
     emit('stateMachineReady', sm)
     console.log('[Live2DStage] Model loaded, state machine started')
