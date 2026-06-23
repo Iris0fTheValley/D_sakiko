@@ -225,6 +225,7 @@ export class Live2DStateMachine {
         case 'motion': {
           // Pygame _emit_motion 事件：只处理 talking/change/Mask 等额外组
           const { group } = event.data
+          console.log('[SM] motion:', group)
           if (!group) break
           const emotionGroups = new Set(Object.values(EMOTION_MAP))
           const builtIn = new Set(['idle_motion', 'IDLE', 'text_generating', 'bye'])
