@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { Application, Ticker } from 'pixi.js'
-import { Live2DStateMachine } from '../statemachine/Live2DStateMachine'
+import { Live2DStateMachine } from '../statemachine'
 
 const props = defineProps<{ modelPath?: string; modelKey?: string }>()
 const emit = defineEmits<{ stateMachineReady: [sm: Live2DStateMachine] }>()

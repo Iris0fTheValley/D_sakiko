@@ -3,7 +3,7 @@ import { shallowRef, ref, onMounted, onUnmounted, computed } from 'vue'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
-import type { Live2DStateMachine } from './statemachine/Live2DStateMachine'
+import type { Live2DStateMachine } from './statemachine'
 
 const stateMachine = shallowRef<Live2DStateMachine | null>(null)
 const wsConnected = ref(false)
