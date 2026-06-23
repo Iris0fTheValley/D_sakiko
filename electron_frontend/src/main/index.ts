@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, screen } from 'electron'
 import { join } from 'node:path'
 
 // GPU 开关
@@ -70,9 +70,9 @@ function createWindow() {
   })
 
   // 获取鼠标屏幕坐标（穿透模式下 renderer 收不到 mousemove）
-  const { screen } = require('electron')
   ipcMain.handle('get-mouse-position', () => {
-    return screen.getCursorScreenPoint()
+    const p = screen.getCursorScreenPoint()
+    return { x: p.x, y: p.y }
   })
 
   // 置顶

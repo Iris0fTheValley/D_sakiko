@@ -93,17 +93,23 @@ async function toggleFadeOnHover() {
     _mousePollTimer = setInterval(async () => {
       try {
         const pos = await electronAPI.getMousePosition()
-        if (!islandRef.value) return
-        const rect = islandRef.value.getBoundingClientRect()
-        const winRect = { left: window.screenX, top: window.screenY, right: window.screenX + window.innerWidth, bottom: window.screenY + window.innerHeight }
-        // 屏幕坐标转窗口内坐标
-        const insideIsland = pos.x >= winRect.left + rect.left && pos.x <= winRect.left + rect.right
-                          && pos.y >= winRect.top + rect.top && pos.y <= winRect.top + rect.bottom
-        if (insideIsland !== !isOutside.value) {
-          isOutside.value = !insideIsland
+        const el = islandRef.value
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        // 元素屏幕坐标 = 窗口位置 + 元素相对位置
+        const elScreenLeft = (window as any).screenX + rect.left
+        const elScreenTop = (window as any).screenY + rect.top
+        const elScreenRight = elScreenLeft + rect.width
+        const elScreenBottom = elScreenTop + rect.height
+        const inside = pos.x >= elScreenLeft && pos.x <= elScreenRight
+                    && pos.y >= elScreenTop && pos.y <= elScreenBottom
+        // debug
+        if (inside !== !isOutside.value) {
+          console.log('[MousePoll] pos:', pos.x, pos.y, 'el:', elScreenLeft, elScreenTop, elScreenRight, elScreenBottom, 'inside:', inside)
         }
+        isOutside.value = !inside
       } catch {}
-    }, 200)
+    }, 150)
   } else {
     if (_mousePollTimer) { clearInterval(_mousePollTimer); _mousePollTimer = null }
   }
