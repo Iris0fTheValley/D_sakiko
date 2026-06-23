@@ -162,8 +162,9 @@ export class Live2DStateMachine {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
-          console.log('[StateMachine] Emotion event:', event.data.label, 'text:', (event.data.text || '').substring(0, 20))
-          // 情感标签 → 动作组 → 随机动作 + 音频 + 文字
+          // emotion 到达 = 开始说话，结束思考状态
+          this.isThinking.value = false
+          this.thinkInterval = THINK_INTERVAL_FIRST
           const { label, audio, text } = event.data
           const group = EMOTION_MAP[label]
 
