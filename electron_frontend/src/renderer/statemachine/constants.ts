@@ -47,8 +47,8 @@ export const LONG_AUDIO_THRESHOLD_SECONDS = 6.0
 export const LONG_AUDIO_REPEAT_DELAY_SECONDS = 1.5
 export const LONG_AUDIO_MAX_REPEATS = 2
 
-/** 空闲恢复延迟（毫秒） */
-export const IDLE_RECOVER_DELAY_MS = 2500
+/** 空闲循环间隔（毫秒），模拟 idle_motion 动画时长 */
+export const IDLE_CYCLE_DELAY_MS = 3000
 
 /** 定时待机间隔（毫秒） */
 export const TIMED_IDLE_INTERVAL_MS = 25000

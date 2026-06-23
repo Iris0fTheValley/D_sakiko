@@ -4,7 +4,7 @@ import type { Ticker } from 'pixi.js'
 import {
   EMOTION_MAP, MOTION_GROUP_SIZES, MODEL_SPECIFIC_SIZES,
   LONG_AUDIO_THRESHOLD_SECONDS, LONG_AUDIO_REPEAT_DELAY_SECONDS, LONG_AUDIO_MAX_REPEATS,
-  IDLE_RECOVER_DELAY_MS, TIMED_IDLE_INTERVAL_MS,
+  IDLE_RECOVER_DELAY_MS, TIMED_IDLE_INTERVAL_MS, IDLE_CYCLE_DELAY_MS,
   THINK_INTERVAL_FIRST, THINK_INTERVAL_SUBSEQUENT,
   EYE_OPEN_DURATION_MS, BYE_TIMEOUT_MS, CLICK_THROTTLE_MS,
 } from './constants'
@@ -331,7 +331,7 @@ export class Live2DStateMachine {
       if (isIdleLike) {
         // idle 循环：加最小延迟再触发下一次（对标 idle_motion 的 ~1s 动画时长）
         this.motionIsOver = true
-        this.idleRecoverTimer = performance.now() - IDLE_RECOVER_DELAY_MS + 1500
+        this.idleRecoverTimer = performance.now() - IDLE_RECOVER_DELAY_MS + IDLE_CYCLE_DELAY_MS
       } else if (isThink) {
         this.thinkMotionIsOver = true
         this.motionIsOver = true
