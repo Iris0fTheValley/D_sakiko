@@ -8,8 +8,6 @@ import ControlButton from './control-button.vue'
 declare const electronAPI: {
   toggleDevTools: () => Promise<boolean>
   toggleAlwaysOnTop: () => Promise<boolean>
-  setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
-  getMousePosition: () => Promise<{ x: number, y: number }>
 }
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -81,36 +79,6 @@ async function toggleAlwaysOnTop() {
 const fadeOnHover = inject<ReturnType<typeof ref<boolean>>>('fadeOnHoverEnabled', ref(false))
 const toggleFadeOnHover = inject<() => void>('toggleFadeOnHover', () => {})
 
-let _mousePollTimer: ReturnType<typeof setInterval> | null = null
-
-async function applyMouseThrough() {
-  const ignore = !!(fadeOnHover.value) && !expanded.value
-  try { await electronAPI.setIgnoreMouseEvents(ignore, { forward: true }) } catch {}
-}
-
-watch(fadeOnHover, (on) => {
-  if (on) {
-    _mousePollTimer = setInterval(async () => {
-      try {
-        const pos = await electronAPI.getMousePosition()
-        const el = islandRef.value
-        if (!el) return
-        const rect = el.getBoundingClientRect()
-        const elScreenLeft = (window as any).screenX + rect.left
-        const elScreenTop = (window as any).screenY + rect.top
-        const inside = pos.x >= elScreenLeft && pos.x <= elScreenLeft + rect.width
-                   && pos.y >= elScreenTop && pos.y <= elScreenTop + rect.height
-        isOutside.value = !inside
-      } catch {}
-    }, 150)
-  } else {
-    if (_mousePollTimer) { clearInterval(_mousePollTimer); _mousePollTimer = null }
-  }
-  applyMouseThrough()
-})
-
-watch([isOutside, expanded], () => { if (fadeOnHover.value) applyMouseThrough() })
-
 const adjustStyleClasses = computed(() => {
   const icon = 'size-5'
   const border = 'border-2'
@@ -128,7 +96,7 @@ function closeWindow() { window.close() }
 </script>
 
 <template>
-  <div ref="islandRef" fixed bottom-2 right-2>
+  <div ref="islandRef" fixed bottom-2 right-2 class="pointer-events-auto" style="pointer-events: auto">
     <div flex flex-col items-end gap-1>
       <Transition
         enter-active-class="transition-all duration-500 cubic-bezier(0.32, 0.72, 0, 1)"
