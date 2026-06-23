@@ -141,10 +141,8 @@ onUnmounted(() => disconnectWebSocket())
     <ResizeHandler />
     <ControlsIsland />
 
-    <!-- DEBUG -->
-    <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999; pointer-events: none;">
-      <div style="width: 100%; height: 100%; border: 4px solid lime; border-radius: 1rem;"></div>
-    </div>
+    <!-- 窗口边框高亮 -->
+    <div v-if="nearBorder" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;pointer-events:none;border:4px solid rgba(59,130,246,0.5);border-radius:1rem;animation:pulse 2s infinite;"></div>
   </div>
 </template>
 
@@ -157,4 +155,9 @@ onUnmounted(() => disconnectWebSocket())
 .thinking-indicator { position:absolute; top:.5rem; left:50%; transform:translateX(-50%); padding:.25rem .75rem; font-size:12px; border-radius:.5rem; background:rgba(38,38,38,.8); color:#f59e0b; pointer-events:none; }
 .fade-enter-active,.fade-leave-active { transition:opacity .3s ease; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 </style>
