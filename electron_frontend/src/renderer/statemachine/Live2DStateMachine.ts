@@ -360,6 +360,7 @@ export class Live2DStateMachine {
     ) {
       return
     }
+    console.log('[StateMachine] Thinking motion triggered, interval was:', this.thinkInterval)
     this.lastThinkTime = now
     this.thinkInterval = THINK_INTERVAL_SUBSEQUENT  // 立即切换为 15s，不等动作播完
     const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))
