@@ -89,13 +89,21 @@ export class Live2DStateMachine {
     this.modelLoaded = true
     // 查找口型参数索引
     try {
-      const cm = (this.model.internalModel as any)?.coreModel
+      const im = this.model.internalModel as any
+      console.log('[StateMachine] internalModel type:', typeof im, 'keys:', Object.keys(im || {}).slice(0,5).join(','))
+      const cm = im?.coreModel
+      console.log('[StateMachine] coreModel exists:', !!cm, 'has getParamIndex:', !!(cm && cm.getParamIndex))
       if (cm && cm.getParamIndex) {
         this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
         console.log('[StateMachine] Mouth param index:', this._mouthParamIndex)
+        // 测试写入
+        if (this._mouthParamIndex >= 0) {
+          cm.setParamFloat(this._mouthParamIndex, 0.5)
+          console.log('[StateMachine] Mouth param test write OK')
+        }
       }
     } catch (e) {
-      console.log('[StateMachine] Mouth param lookup failed:', e)
+      console.error('[StateMachine] Mouth param lookup failed:', e)
     }
     // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
     try {
@@ -520,10 +528,16 @@ export class Live2DStateMachine {
   }
 
   /** 通过 coreModel 设置口型参数 */
+  private _mouthSetLogged = false
   private _setMouthParam(value: number): void {
-    if (this._mouthParamIndex < 0) return
+    if (this._mouthParamIndex < 0) {
+      if (!this._mouthSetLogged) { console.log('[StateMachine] _setMouthParam skipped: index=-1'); this._mouthSetLogged = true }
+      return
+    }
     try {
       ;(this.model.internalModel as any)?.coreModel?.setParamFloat(this._mouthParamIndex, value)
-    } catch (_e) { /* ignore */ }
+    } catch (e) {
+      if (!this._mouthSetLogged) { console.error('[StateMachine] setParamFloat failed:', e); this._mouthSetLogged = true }
+    }
   }
 }
