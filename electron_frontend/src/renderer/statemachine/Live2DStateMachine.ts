@@ -272,8 +272,7 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback（无 onFinish）
     this.motionIsOver = false
-    // 推迟到下一个微任务，避免同步调用 model.motion() 导致动画不播放
-    setTimeout(() => this._playMotion('idle_motion', 1), 0)
+    this._playMotion('IDLE', 1)  // TEST: IDLE 有 7 个动作
   }
 
   // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
