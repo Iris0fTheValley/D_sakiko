@@ -351,7 +351,9 @@ export class Live2DStateMachine {
     const isIdle = group === 'idle_motion'
     const isThink = group === 'text_generating'
 
-    this.model.motion(group, idx, priority).then(() => {
+    const p = this.model.motion(group, idx, priority)
+    console.log('[SM] motion promise:', group, 'isPromise:', p instanceof Promise, 'thenable:', typeof p?.then)
+    p.then(() => {
       console.log('[SM] motion completed:', group, 'id:', motionId)
       if (motionId !== this.currentMotionId) return
 
