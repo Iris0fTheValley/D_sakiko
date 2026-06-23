@@ -162,6 +162,7 @@ export class Live2DStateMachine {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
+          console.log('[StateMachine] Emotion event:', event.data.label, 'text:', (event.data.text || '').substring(0, 20))
           // 情感标签 → 动作组 → 随机动作 + 音频 + 文字
           const { label, audio, text } = event.data
           const group = EMOTION_MAP[label]
@@ -360,7 +361,6 @@ export class Live2DStateMachine {
     ) {
       return
     }
-    console.log('[StateMachine] Thinking motion triggered, interval was:', this.thinkInterval)
     this.lastThinkTime = now
     this.thinkInterval = THINK_INTERVAL_SUBSEQUENT  // 立即切换为 15s，不等动作播完
     const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))

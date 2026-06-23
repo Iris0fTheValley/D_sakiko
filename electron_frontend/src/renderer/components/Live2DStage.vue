@@ -50,17 +50,11 @@ onMounted(async () => {
 
     // 设置初始表情
     try {
-      const exp = key === 'sakiko' ? 'serious' : 'idle'
-      live2dModel.expression(exp)
-      console.log('[Live2DStage] Expression set to:', exp)
-      // 3 秒后切到另一个表情验证 API 是否生效
-      setTimeout(() => {
-        try {
-          const alt = exp === 'serious' ? 'idle' : 'serious'
-          live2dModel.expression(alt)
-          console.log('[Live2DStage] Expression switched to:', alt)
-        } catch (_e) { /* ignore */ }
-      }, 3000)
+      if (key === 'sakiko') {
+        live2dModel.expression('serious')
+      } else {
+        live2dModel.expression('idle')
+      }
     } catch (_e) { /* expression not supported */ }
 
     // 创建状态机并启动
