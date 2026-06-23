@@ -84,7 +84,7 @@ class Bridge:
                 )
 
     def _motion_reader(self):
-        """从 Pygame 进程的 motion_event_queue 读取动作事件 → WS 广播"""
+        """从 Pygame 进程的 motion_event_queue 读取动作/表情事件 → WS 广播"""
         loop = self._loop
         while True:
             try:
@@ -94,9 +94,15 @@ class Bridge:
             if event is None:
                 break
             if loop is not None:
-                asyncio.run_coroutine_threadsafe(
-                    self.ws.broadcast('motion', event), loop
-                )
+                # 区分动作事件和表情事件
+                if isinstance(event, dict) and event.get('type') == 'expression':
+                    asyncio.run_coroutine_threadsafe(
+                        self.ws.broadcast('expression', event), loop
+                    )
+                else:
+                    asyncio.run_coroutine_threadsafe(
+                        self.ws.broadcast('motion', event), loop
+                    )
 
     async def _start_audio_server(self):
         """启动 HTTP 静态文件服务，供 Electron 加载音频文件"""

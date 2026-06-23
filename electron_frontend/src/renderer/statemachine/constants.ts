@@ -68,6 +68,6 @@ export const CLICK_THROTTLE_MS = 200
 
 /** WS 事件类型 */
 export interface StateMachineEvent {
-  type: 'emotion' | 'text_generating' | 'cancel_turn' | 'user_text' | 'bye' | 'motion'
+  type: 'emotion' | 'text_generating' | 'cancel_turn' | 'user_text' | 'bye' | 'motion' | 'expression'
   data: any
 }

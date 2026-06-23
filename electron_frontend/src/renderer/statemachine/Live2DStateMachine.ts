@@ -189,6 +189,15 @@ export class Live2DStateMachine {
         }
 
         // motion 事件保留兼容（对照模式下 Pygame 发来的额外动作）
+        case 'expression': {
+          // Pygame SetExpression 事件
+          const { name } = event.data
+          if (name) {
+            try { this.model.expression(name) } catch (_) {}
+          }
+          break
+        }
+
         case 'motion': {
           // Pygame _emit_motion 驱动所有动作（不跳过任何组）
           const { group } = event.data
