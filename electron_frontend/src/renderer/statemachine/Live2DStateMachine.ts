@@ -109,9 +109,22 @@ export class Live2DStateMachine {
         this._lappModel = cm
       }
       if (!this._lappModel) {
-        // 全局搜索
-        const globalKeys = Object.keys(window).filter(k => k.toLowerCase().includes('live2d') || k.toLowerCase().includes('lapp'))
-        console.log('[StateMachine] Global Live2D keys:', globalKeys)
+        // 检查 Live2DFramework 命名空间
+        const lf = (window as any).Live2DFramework
+        if (lf) {
+          const lfKeys = Object.keys(lf)
+          console.log('[StateMachine] Live2DFramework keys:', lfKeys)
+          // LAppModel 可能在 Live2DFramework.LAppModel
+          if (lf.LAppModel) {
+            console.log('[StateMachine] Found LAppModel at Live2DFramework.LAppModel')
+          }
+        }
+        // 检查 Live2D 全局
+        const l2d = (window as any).Live2D
+        if (l2d) {
+          const l2dKeys = Object.keys(l2d).slice(0, 15)
+          console.log('[StateMachine] Live2D keys:', l2dKeys)
+        }
       }
       if (cm?.getParamIndex) {
         this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
