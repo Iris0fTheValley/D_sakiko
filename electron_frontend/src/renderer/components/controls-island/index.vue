@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { refDebounced, useIntervalFn } from '@vueuse/core'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch, inject } from 'vue'
 
 import ControlButtonTooltip from './control-button-tooltip.vue'
 import ControlButton from './control-button.vue'
@@ -78,45 +78,37 @@ async function toggleAlwaysOnTop() {
   } catch { alwaysOnTop.value = !alwaysOnTop.value }
 }
 
-const fadeOnHover = ref(false)
+const fadeOnHover = inject<ReturnType<typeof ref<boolean>>>('fadeOnHoverEnabled', ref(false))
+const toggleFadeOnHover = inject<() => void>('toggleFadeOnHover', () => {})
+
 let _mousePollTimer: ReturnType<typeof setInterval> | null = null
 
 async function applyMouseThrough() {
-  const ignore = fadeOnHover.value && !expanded.value && isOutside.value
+  const ignore = !!(fadeOnHover.value) && !expanded.value
   try { await electronAPI.setIgnoreMouseEvents(ignore, { forward: true }) } catch {}
 }
 
-async function toggleFadeOnHover() {
-  fadeOnHover.value = !fadeOnHover.value
-  if (fadeOnHover.value) {
-    // 启动 IPC 轮询鼠标位置（穿透后 renderer mousemove 不触发）
+watch(fadeOnHover, (on) => {
+  if (on) {
     _mousePollTimer = setInterval(async () => {
       try {
         const pos = await electronAPI.getMousePosition()
         const el = islandRef.value
         if (!el) return
         const rect = el.getBoundingClientRect()
-        // 元素屏幕坐标 = 窗口位置 + 元素相对位置
         const elScreenLeft = (window as any).screenX + rect.left
         const elScreenTop = (window as any).screenY + rect.top
-        const elScreenRight = elScreenLeft + rect.width
-        const elScreenBottom = elScreenTop + rect.height
-        const inside = pos.x >= elScreenLeft && pos.x <= elScreenRight
-                    && pos.y >= elScreenTop && pos.y <= elScreenBottom
-        // debug
-        if (inside !== !isOutside.value) {
-          console.log('[MousePoll] pos:', pos.x, pos.y, 'el:', elScreenLeft, elScreenTop, elScreenRight, elScreenBottom, 'inside:', inside)
-        }
+        const inside = pos.x >= elScreenLeft && pos.x <= elScreenLeft + rect.width
+                   && pos.y >= elScreenTop && pos.y <= elScreenTop + rect.height
         isOutside.value = !inside
       } catch {}
     }, 150)
   } else {
     if (_mousePollTimer) { clearInterval(_mousePollTimer); _mousePollTimer = null }
   }
-  await applyMouseThrough()
-}
+  applyMouseThrough()
+})
 
-// 面板展开/关闭时重新判断
 watch([isOutside, expanded], () => { if (fadeOnHover.value) applyMouseThrough() })
 
 const adjustStyleClasses = computed(() => {

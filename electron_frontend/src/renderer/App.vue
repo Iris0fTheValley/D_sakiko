@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef, ref, onUnmounted, computed } from 'vue'
+import { shallowRef, ref, onUnmounted, computed, onMounted, provide } from 'vue'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
@@ -21,6 +21,36 @@ const currentModelPath = computed(() => {
   return `/live2d/${currentCharKey.value}/live2D_model/3.model.json`
 })
 const stageKey = ref(0)
+
+// ── 悬停淡出（airi fade-on-hover）──
+const fadeOnHoverEnabled = ref(false)
+const mouseX = ref(0)
+const mouseY = ref(0)
+const mouseInWindow = ref(true)
+const isOverModel = computed(() => {
+  if (!mouseInWindow.value) return false
+  const mx = 0.2
+  return mouseX.value > window.innerWidth * mx
+      && mouseX.value < window.innerWidth * (1 - mx)
+      && mouseY.value > window.innerHeight * mx
+      && mouseY.value < window.innerHeight * (1 - mx)
+})
+const shouldFade = computed(() => fadeOnHoverEnabled.value && isOverModel.value)
+
+onMounted(() => {
+  window.addEventListener('mousemove', (e) => {
+    mouseX.value = e.clientX; mouseY.value = e.clientY
+  })
+  document.addEventListener('mouseleave', () => { mouseInWindow.value = false })
+  document.addEventListener('mouseenter', () => { mouseInWindow.value = true })
+})
+
+function toggleFadeOnHover() {
+  fadeOnHoverEnabled.value = !fadeOnHoverEnabled.value
+}
+
+provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
+provide('toggleFadeOnHover', toggleFadeOnHover)
 
 function reloadModel(charKey: string, costumeMode: boolean | null = null) {
   disconnectWebSocket()
@@ -82,7 +112,7 @@ onUnmounted(() => disconnectWebSocket())
 
 <template>
   <div class="app-root">
-    <div class="stage-area">
+    <div class="stage-area" :class="{ 'op-0': shouldFade }" :style="{ transition: 'opacity 0.25s ease-in-out' }">
       <Live2DStage :key="stageKey" :model-path="currentModelPath" :model-key="currentCharKey" @state-machine-ready="onStateMachineReady" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
