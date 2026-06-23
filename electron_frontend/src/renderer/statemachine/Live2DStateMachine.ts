@@ -349,7 +349,6 @@ export class Live2DStateMachine {
 
   private checkTimedIdle(now: number): void {
     if (
-      this.motionInProgress ||
       this.isThinking.value ||
       this.audioPlaying ||
       this.longAudioActive ||
@@ -357,11 +356,17 @@ export class Live2DStateMachine {
     ) {
       return
     }
+    // 不检查 motionInProgress — Pygame 的 IDLE 可以用同优先级打断 idle_motion
     this.lastIdleTime = now
-    const idx = Math.floor(Math.random() * (this.getMotionSize('IDLE')))
+    const idx = Math.floor(Math.random() * this.getMotionSize('IDLE'))
+    this.motionInProgress = true
     this.model.motion('IDLE', idx, 1).then(() => {
+      this.motionInProgress = false
       this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
-    }).catch((e) => console.warn('[StateMachine] Timed idle failed:', e))
+    }).catch((e) => {
+      console.warn('[StateMachine] Timed idle failed:', e)
+      this.motionInProgress = false
+    })
   }
 
   private checkThinkingMotion(now: number): void {
