@@ -56,6 +56,7 @@ tools/hpatchz
 **/*.hdiff
 **/node_modules/**
 .scratch/**
+.worktrees/
 
 .idea/**
 .vscode/**
