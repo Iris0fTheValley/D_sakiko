@@ -83,6 +83,8 @@ export class Live2DStateMachine {
   start(): void {
     // 高优先级确保在模型更新之后执行（嘴型覆盖动作参数）
     this.ticker.add(this.tickerCallback, undefined, 30 as any)
+    // 设置初始空闲恢复 deadline，启动后 2.5s 触发首次 idle_motion（匹配 Pygame 行为）
+    this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
     // 查找口型参数 API — coreModel.setParamFloat 是底层 C++ 模型
