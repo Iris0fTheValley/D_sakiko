@@ -46,7 +46,11 @@ let reconnectDelay = 1000
 const WS_URL = 'ws://localhost:9876'
 
 function connectWebSocket(sm: Live2DStateMachine) {
-  if (ws?.readyState === WebSocket.OPEN) return
+  // 先断开旧连接（HMR 可能导致旧 WS 残留）
+  if (ws) {
+    try { ws.onopen = null; ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close() } catch (_) {}
+    ws = null
+  }
 
   try {
     ws = new WebSocket(WS_URL)
