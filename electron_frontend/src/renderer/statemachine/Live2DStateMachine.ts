@@ -499,7 +499,16 @@ export class Live2DStateMachine {
   // ── 口型同步（Hook coreModel.update() 方案）──
 
   /** 在 coreModel.update() 前调用（通过 Hook），在动作参数更新后、顶点计算前设置口型 */
+  private _preUpdateDebug = 0
   _preUpdateMouth(): void {
+    // 调试：前 120 帧强制张嘴到 0.8，验证机制是否生效
+    if (++this._preUpdateDebug <= 120) {
+      this._rawSetMouth(0.8)
+      if (this._preUpdateDebug === 1) console.log('[StateMachine] DEBUG: forcing mouth to 0.8 for 120 frames')
+      return
+    }
+    if (this._preUpdateDebug === 121) console.log('[StateMachine] DEBUG: mouth force test done, switching to RMS')
+
     if (!this.audioPlaying || !this.analyserNode || this._mouthParamIndex < 0) {
       if (this.mouthOpenValue > 0.005) {
         this.mouthOpenValue *= 0.85
