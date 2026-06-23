@@ -329,7 +329,9 @@ export class Live2DStateMachine {
       if (motionId !== this.currentMotionId) return
 
       if (isIdleLike) {
+        // idle 循环：加最小延迟再触发下一次（对标 idle_motion 的 ~1s 动画时长）
         this.motionIsOver = true
+        this.idleRecoverTimer = performance.now() - IDLE_RECOVER_DELAY_MS + 1500
       } else if (isThink) {
         this.thinkMotionIsOver = true
         this.motionIsOver = true
