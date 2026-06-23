@@ -38,7 +38,6 @@ export class Live2DStateMachine {
   private mouthOpenValue = 0
   private lipSyncN = 1.4  // 系数，与 Pygame 一致
   private _mouthParamIndex: number = -1  // PARAM_MOUTH_OPEN_Y 的参数索引
-  private _lappModel: any = null         // LAppModel 实例（有参数缓存）
   private audioContext: AudioContext | null = null
   private analyserNode: AnalyserNode | null = null
 
@@ -90,50 +89,26 @@ export class Live2DStateMachine {
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
     // 查找口型参数 API — coreModel.setParamFloat 是底层 C++ 模型
-    // LAppModel 有自己的参数缓存，渲染用的缓存。需要找到 LAppModel 实例
+    // 查找口型参数并 Hook coreModel.update()
     try {
-      const im = this.model.internalModel as any
-      const cm = im?.coreModel
-      // 找 LAppModel（可能挂在 internalModel 上）
-      const candidates = ['_lappModel', 'lappModel', '_model', '__model', 'live2DModel', '_live2d', '__lapp']
-      for (const key of candidates) {
-        if (im[key] && typeof im[key].SetParameterValue === 'function') {
-          console.log('[StateMachine] Found LAppModel at internalModel.' + key)
-          this._lappModel = im[key]
-          break
-        }
-      }
-      // 也检查 coreModel 身上
-      if (!this._lappModel && cm && typeof cm.SetParameterValue === 'function') {
-        console.log('[StateMachine] coreModel IS LAppModel (has SetParameterValue)')
-        this._lappModel = cm
-      }
-      if (!this._lappModel) {
-        // 检查 Live2DFramework 命名空间
-        const lf = (window as any).Live2DFramework
-        if (lf) {
-          const lfKeys = Object.keys(lf)
-          console.log('[StateMachine] Live2DFramework keys:', lfKeys)
-          // LAppModel 可能在 Live2DFramework.LAppModel
-          if (lf.LAppModel) {
-            console.log('[StateMachine] Found LAppModel at Live2DFramework.LAppModel')
-          }
-        }
-        // 检查 Live2D 全局
-        const l2d = (window as any).Live2D
-        if (l2d) {
-          const l2dKeys = Object.keys(l2d).slice(0, 15)
-          console.log('[StateMachine] Live2D keys:', l2dKeys)
-        }
-      }
+      const cm = (this.model.internalModel as any)?.coreModel
       if (cm?.getParamIndex) {
         this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
         console.log('[StateMachine] Mouth param index:', this._mouthParamIndex)
+        // Hook coreModel.update() — 在动作系统设参之后、核心 update 之前插入嘴型值
+        if (this._mouthParamIndex >= 0 && cm.update) {
+          const originalUpdate = cm.update.bind(cm)
+          const self = this
+          cm.update = function() {
+            self._preUpdateMouth()
+            return originalUpdate()
+          }
+          console.log('[StateMachine] Hooked coreModel.update()')
+        }
       }
     } catch (e) {
       console.error('[StateMachine] Mouth param lookup failed:', e)
     }
-    this._lappModel = null as any
     // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
     try {
       // @ts-expect-error internalModel API not fully typed
@@ -184,7 +159,6 @@ export class Live2DStateMachine {
       this.checkLongAudioLoop(now)
     }
     this.updateEyeOpen(now)
-    this.updateMouthSync()
   }
 
   // ── 以下方法在后续任务中实现 ──
@@ -522,54 +496,35 @@ export class Live2DStateMachine {
     }
   }
 
-  /** 每帧更新口型参数（每 3 帧一次，与 Pygame 的 is_update_mouth_sync % 3 == 0 一致） */
-  private updateMouthSync(): void {
+  // ── 口型同步（Hook coreModel.update() 方案）──
+
+  /** 在 coreModel.update() 前调用（通过 Hook），在动作参数更新后、顶点计算前设置口型 */
+  _preUpdateMouth(): void {
     if (!this.audioPlaying || !this.analyserNode || this._mouthParamIndex < 0) {
-      // 无音频时衰减口型
       if (this.mouthOpenValue > 0.005) {
         this.mouthOpenValue *= 0.85
-        this._setMouthParam(this.mouthOpenValue)
-      } else if (this.mouthOpenValue > 0) {
+      } else {
         this.mouthOpenValue = 0
-        this._setMouthParam(0)
       }
+      this._rawSetMouth(this.mouthOpenValue)
       return
     }
     this.mouthSyncFrameCount++
     if (this.mouthSyncFrameCount % 3 !== 0) return
-
-    // 每 60 帧打印一次 RMS 调试
-    const debug = this.mouthSyncFrameCount % 60 === 0
-
     try {
       const bufferLength = this.analyserNode.fftSize
       const dataArray = new Float32Array(bufferLength)
       this.analyserNode.getFloatTimeDomainData(dataArray)
       let sum = 0
-      for (let i = 0; i < bufferLength; i++) {
-        sum += dataArray[i] * dataArray[i]
-      }
+      for (let i = 0; i < bufferLength; i++) { sum += dataArray[i] * dataArray[i] }
       const rms = Math.sqrt(sum / bufferLength)
       this.mouthOpenValue = Math.min(1.0, rms * this.lipSyncN)
-      this._setMouthParam(this.mouthOpenValue)
     } catch (_e) { /* ignore */ }
+    this._rawSetMouth(this.mouthOpenValue)
   }
 
-  /** 通过 coreModel 设置口型参数 */
-  private _mouthVerifyCount = 0
-  private _setMouthParam(value: number): void {
-    if (this._mouthParamIndex < 0) return
-    try {
-      // 优先用 LAppModel.SetParameterValue（更新渲染缓存）
-      if (this._lappModel?.SetParameterValue) {
-        this._lappModel.SetParameterValue('PARAM_MOUTH_OPEN_Y', value)
-      } else {
-        // fallback: coreModel.setParamFloat（只写底层，可能不渲染）
-        const cm = (this.model.internalModel as any)?.coreModel
-        cm?.setParamFloat?.(this._mouthParamIndex, value)
-      }
-    } catch (e) {
-      console.error('[StateMachine] setParamFloat error:', e)
-    }
+  private _rawSetMouth(value: number): void {
+    const cm = (this.model.internalModel as any)?.coreModel
+    cm?.setParamFloat?.(this._mouthParamIndex, value)
   }
 }
