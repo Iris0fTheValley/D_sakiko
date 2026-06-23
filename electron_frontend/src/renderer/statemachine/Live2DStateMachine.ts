@@ -249,7 +249,8 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback_think_motion_version
     this.thinkMotionIsOver = false
-    setTimeout(() => this._playMotion('text_generating', 3), 0)
+
+    this._playMotion('text_generating', 3)
   }
 
   // ── checkIdleRecover: idle_motion 恢复（1:1 Pygame）──
@@ -278,7 +279,7 @@ export class Live2DStateMachine {
 
     // Pygame: StartRandomMotion("IDLE",1,onStart,onFinish)
     this.motionIsOver = false
-    setTimeout(() => this._playMotion('IDLE', 1), 0)
+    this._playMotion('IDLE', 1)
   }
 
   // ── checkClick ──
