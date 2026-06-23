@@ -86,6 +86,38 @@ export class Live2DStateMachine {
     this.ticker.add(this.tickerCallback)
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
+    // 调试：列出可用参数
+    try {
+      // @ts-expect-error
+      const im = this.model.internalModel
+      if (im && im.getParameterCount) {
+        // @ts-expect-error
+        const count = im.getParameterCount()
+        const mouthParams: string[] = []
+        for (let i = 0; i < count; i++) {
+          // @ts-expect-error
+          const p = im.getParameter(i)
+          const pid = p?.id || p?.ID || ''
+          if (pid.toLowerCase().includes('mouth')) {
+            mouthParams.push(pid)
+          }
+        }
+        if (mouthParams.length > 0) {
+          console.log('[StateMachine] Mouth parameters found:', mouthParams)
+        } else {
+          console.log('[StateMachine] No mouth params in', count, 'params. Sampling first 5:', 
+            Array.from({length: Math.min(5, count)}, (_, i) => {
+              // @ts-expect-error
+              const p = im.getParameter(i)
+              return p?.id || p?.ID || p
+            }))
+        }
+      } else {
+        console.log('[StateMachine] internalModel has no getParameterCount. Keys:', Object.keys(im || {}).slice(0, 10))
+      }
+    } catch (e) {
+      console.log('[StateMachine] Param debug failed:', e)
+    }
     // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
     try {
       // @ts-expect-error internalModel API not fully typed
