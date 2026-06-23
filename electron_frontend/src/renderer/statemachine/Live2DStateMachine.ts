@@ -88,9 +88,20 @@ export class Live2DStateMachine {
     this.ticker.add(this.tickerCallback, undefined, 30 as any)
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
-    // 查找口型参数索引
+    // 查找口型参数索引和设置 API
     try {
-      const cm = (this.model.internalModel as any)?.coreModel
+      const im = this.model.internalModel as any
+      const cm = im?.coreModel
+      // 尝试找 LAppModel 级别的参数设置方法
+      const setMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(im))
+        .filter(k => k.toLowerCase().includes('param') || k.toLowerCase().includes('set'))
+      console.log('[StateMachine] internalModel param methods:', setMethods)
+      // 也检查 coreModel 原型
+      if (cm) {
+        const cmMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(cm))
+          .filter(k => k.toLowerCase().includes('param') || k.toLowerCase().includes('set'))
+        console.log('[StateMachine] coreModel param methods:', cmMethods)
+      }
       if (cm?.getParamIndex) {
         this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
         console.log('[StateMachine] Mouth param index:', this._mouthParamIndex)
