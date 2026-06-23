@@ -220,6 +220,19 @@ export class Live2DStateMachine {
           this._playMotion('change_character', 3)
           break
         }
+
+        case 'char_converted': {
+          // Qt 黑白祥切换 / mask 切换
+          // 模型加载由 App.vue 根据 switch_live2d 事件处理，这里只触发动作
+          const { value } = event.data
+          if (value === 'maskoff') {
+            this._playMotion(Math.random() < 0.5 ? 'change_character_maskoff' : 'maskon', 3)
+          } else {
+            // 0=白祥, 1=黑祥 → 已在 switch_live2d 中切换模型
+            // 这里不额外播动作（switch_live2d 已播了 change_character）
+          }
+          break
+        }
       }
     }
   }
