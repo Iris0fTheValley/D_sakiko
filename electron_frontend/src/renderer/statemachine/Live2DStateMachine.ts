@@ -106,16 +106,8 @@ export class Live2DStateMachine {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
-          const { label, audio, text } = event.data
-          const group = EMOTION_MAP[label]
-          if (!group) {
-            console.warn('[StateMachine] Unknown emotion label:', label)
-            break
-          }
-
-          // 并发保护：标记旧 Promise 为废弃
-          this.currentMotionId++
-          const motionId = this.currentMotionId
+          // emotion 事件只处理文本和音频，动作由 motion 事件驱动（来自 Pygame _emit_motion）
+          const { audio, text } = event.data
 
           // 打断当前音频
           if (this.currentAudio) {
@@ -130,17 +122,8 @@ export class Live2DStateMachine {
           this.longAudioActive = false
           this.longAudioTriggeredCount = 0
 
-          // 随机选索引
-          const size = MOTION_GROUP_SIZES[group] ?? 1
-          const idx = Math.floor(Math.random() * size)
-
-          // 启动动作（不 await）→ 记录 Promise
-          this.motionInProgress = true
-          const motionPromise = this.model.motion(group, idx, 3)
-
           // 并行播放音频
           if (audio) {
-            // 路径含空格，Electron 用 file:// 协议
             const audioPath = audio.startsWith('file://') ? audio : `file:///${audio.replace(/\\/g, '/')}`
             const audioEl = new Audio(audioPath)
             this.currentAudioId++
@@ -149,12 +132,10 @@ export class Live2DStateMachine {
             this.audioPlaying = true
             audioEl.play().catch((e) => console.warn('[StateMachine] Audio play failed:', e))
 
-            // 判断长音频（loadedmetadata 事件，避免 duration 为 NaN）
             audioEl.addEventListener('loadedmetadata', () => {
               if (audioId !== this.currentAudioId) return
               if (audioEl.duration > LONG_AUDIO_THRESHOLD_SECONDS) {
                 this.longAudioActive = true
-                this.longAudioGroup = group
                 this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
               }
             })
@@ -166,12 +147,35 @@ export class Live2DStateMachine {
             })
           }
 
-          // 统一的动作结束回调
+          if (text) {
+            this.textBubble.value = text
+          }
+          break
+        }
+
+        case 'motion': {
+          // motion 事件来自 Pygame 的 _emit_motion：{ group, priority, timestamp }
+          const { group, priority } = event.data
+          if (!group) break
+
+          this.currentMotionId++
+          const motionId = this.currentMotionId
+
+          const size = MOTION_GROUP_SIZES[group] ?? 1
+          const idx = Math.floor(Math.random() * size)
+
+          this.motionInProgress = true
+          const motionPromise = this.model.motion(group, idx, priority ?? 3)
+
+          // 更新长音频 group（音频由 emotion 事件启动时标记）
+          if (this.longAudioActive && group !== 'idle_motion' && group !== 'IDLE') {
+            this.longAudioGroup = group
+          }
+
           motionPromise.then(() => {
-            if (motionId !== this.currentMotionId) return  // 旧 Promise，忽略
+            if (motionId !== this.currentMotionId) return
             this.motionInProgress = false
             this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
-            // 睁眼过渡
             this.eyeOpenPending = true
             this.eyeOpenStartTime = performance.now()
             try {
@@ -189,11 +193,6 @@ export class Live2DStateMachine {
               this.reset()
             }
           })
-
-          // 更新文字气泡
-          if (text) {
-            this.textBubble.value = text
-          }
           break
         }
 
@@ -224,17 +223,16 @@ export class Live2DStateMachine {
         }
 
         case 'bye': {
+          // bye 动作由 Pygame 的 _emit_motion("bye") 驱动（motion 事件）
+          // 这里只设置超时关闭窗口
           this.stopAudio()
-          const byeIdx = Math.floor(Math.random() * (MOTION_GROUP_SIZES['bye'] ?? 2))
-          const byePromise = this.model.motion('bye', byeIdx, 3)
-          const timeout = new Promise((resolve) => setTimeout(resolve, BYE_TIMEOUT_MS))
-          Promise.race([byePromise, timeout]).then(() => {
+          setTimeout(() => {
             try {
               ;(window as any).electronAPI?.closeWindow()
             } catch (_e) {
               window.close()
             }
-          })
+          }, BYE_TIMEOUT_MS)
           break
         }
       }

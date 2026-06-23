@@ -27,10 +27,12 @@ from ws_server import WSServer
 class Bridge:
     """简化的 Bridge 类，替代旧的 saki_launcher.py"""
 
-    def __init__(self, bridge_queue):
+    def __init__(self, bridge_queue, motion_queue=None):
         self.bridge_q = bridge_queue
+        self.motion_q = motion_queue
         self.ws = WSServer()
         self._reader_thread: Optional[threading.Thread] = None
+        self._motion_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def start(self):
@@ -50,6 +52,12 @@ class Bridge:
             target=self._reader, daemon=True
         )
         self._reader_thread.start()
+        # 开启 motion_event_queue reader（从 Pygame 进程读取动作事件）
+        if self.motion_q is not None:
+            self._motion_reader_thread = threading.Thread(
+                target=self._motion_reader, daemon=True
+            )
+            self._motion_reader_thread.start()
         loop.run_forever()
 
     def _reader(self):
@@ -62,6 +70,21 @@ class Bridge:
             if loop is not None:
                 asyncio.run_coroutine_threadsafe(
                     self.ws.broadcast(msg['type'], msg['data']), loop
+                )
+
+    def _motion_reader(self):
+        """从 Pygame 进程的 motion_event_queue 读取动作事件 → WS 广播"""
+        loop = self._loop
+        while True:
+            try:
+                event = self.motion_q.get(timeout=5)
+            except Exception:
+                continue
+            if event is None:
+                break
+            if loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self.ws.broadcast('motion', event), loop
                 )
 
     def shutdown(self):
