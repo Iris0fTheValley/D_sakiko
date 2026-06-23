@@ -341,16 +341,18 @@ export class Live2DStateMachine {
   // ── 动作播放 + 回调 ──
   private _playMotion(group: string, priority: number): void {
     const size = this.getMotionSize(group)
-    if (size <= 0) return
+    if (size <= 0) { console.warn('[SM] _playMotion: unknown group', group); return }
     const idx = Math.floor(Math.random() * size)
     this.currentMotionId++
     const motionId = this.currentMotionId
+    console.log('[SM] _playMotion:', group, 'idx:', idx, 'pri:', priority, 'id:', motionId)
 
     // 确定回调行为
     const isIdle = group === 'idle_motion'
     const isThink = group === 'text_generating'
 
     this.model.motion(group, idx, priority).then(() => {
+      console.log('[SM] motion completed:', group, 'id:', motionId)
       if (motionId !== this.currentMotionId) return
 
       if (isThink) {
@@ -370,7 +372,8 @@ export class Live2DStateMachine {
       if (!isIdle) {
         this._queueEyeOpen()
       }
-    }).catch(() => {
+    }).catch((e) => {
+      console.error('[SM] motion FAILED:', group, e)
       this.motionIsOver = true
     })
   }
