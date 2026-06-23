@@ -47,6 +47,15 @@ onMounted(async () => {
     live2dModel.y = app.screen.height / 2
     app.stage.addChild(live2dModel)
 
+    // 设置初始表情
+    try {
+      if (key === 'sakiko') {
+        live2dModel.expression('serious')
+      } else {
+        live2dModel.expression('idle')
+      }
+    } catch (_e) { /* expression not supported */ }
+
     // 创建状态机并启动
     const key = props.modelKey || 'sakiko'
     sm = new Live2DStateMachine(live2dModel, Ticker.shared, key)
