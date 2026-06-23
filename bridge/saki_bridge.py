@@ -86,6 +86,14 @@ class Bridge:
     def _motion_reader(self):
         """从 Pygame 进程的 motion_event_queue 读取动作/表情事件 → WS 广播"""
         loop = self._loop
+        while True:
+            try:
+                event = self.motion_q.get(timeout=5)
+            except Exception:
+                continue
+            if event is None:
+                break
+            if loop is not None:
                 # 区分动作事件和表情事件
                 if isinstance(event, dict) and event.get('type') == 'expression':
                     asyncio.run_coroutine_threadsafe(
@@ -146,14 +154,7 @@ class Bridge:
         await asyncio.start_server(handle_audio, '127.0.0.1', AUDIO_PORT)
         print(f'[Audio HTTP] Serving on http://127.0.0.1:{AUDIO_PORT}/audio/')
 
-            except Exception:
-                empty_count += 1
-                if empty_count % 12 == 1:  # every ~60 seconds
-                    try:
-                        print(f'[Bridge] Motion queue empty ({empty_count * 5}s), qsize={self.motion_q.qsize()}', flush=True)
-                    except:
-                        pass
-                continue
+    def shutdown(self):
         """向 reader 线程发送停止信号"""
         if self.bridge_q is not None:
             self.bridge_q.put(None)
