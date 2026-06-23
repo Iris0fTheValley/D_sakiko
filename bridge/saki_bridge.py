@@ -113,6 +113,11 @@ class Bridge:
                     writer.close()
                     return
                 url_path = parts[1].split('?')[0]
+                # 处理 CORS 预检请求
+                if parts[0] == 'OPTIONS':
+                    writer.write(b'HTTP/1.0 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\n\r\n')
+                    writer.close()
+                    return
                 # URL: /audio/xxx.wav → 映射到 audio_base/xxx.wav
                 rel = url_path.lstrip('/').replace('audio/', '', 1) if url_path.startswith('/audio/') else url_path.lstrip('/')
                 filepath = os.path.normpath(os.path.join(audio_base, rel))
