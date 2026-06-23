@@ -20,6 +20,8 @@ const stageKey = ref(0)  // 切换角色时递增，强制重建 Live2DStage
 
 function switchCharacter(key: string) {
   if (key === currentCharKey.value) return
+  // 断开旧连接，销毁旧状态机
+  disconnectWebSocket()
   stateMachine.value?.destroy()
   stateMachine.value = null
   currentCharKey.value = key
