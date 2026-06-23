@@ -13,20 +13,21 @@ const isThinking = computed(() => stateMachine.value?.isThinking.value ?? false)
 
 // 模型切换（由 WS 事件驱动）
 const currentCharKey = ref('sakiko')
-const costumeMode = ref(false)
-const currentModelPath = computed(() =>
-  costumeMode.value && currentCharKey.value === 'sakiko'
-    ? '/live2d/sakiko/live2D_model_costume/3.model.json'
-    : `/live2d/${currentCharKey.value}/live2D_model/3.model.json`
-)
+const sakikoState = ref(true)  // true=黑祥(costume), false=白祥(base)，默认黑祥
+const currentModelPath = computed(() => {
+  if (currentCharKey.value === 'sakiko' && sakikoState.value) {
+    return '/live2d/sakiko/live2D_model_costume/3.model.json'
+  }
+  return `/live2d/${currentCharKey.value}/live2D_model/3.model.json`
+})
 const stageKey = ref(0)
 
-function reloadModel(charKey: string, useCostume: boolean = false) {
+function reloadModel(charKey: string, costumeMode: boolean | null = null) {
   disconnectWebSocket()
   stateMachine.value?.destroy()
   stateMachine.value = null
   currentCharKey.value = charKey
-  costumeMode.value = useCostume
+  if (costumeMode !== null) sakikoState.value = costumeMode
   stageKey.value++
 }
 
