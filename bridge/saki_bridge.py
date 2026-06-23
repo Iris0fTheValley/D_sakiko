@@ -124,8 +124,13 @@ class Bridge:
                     writer.write(b'HTTP/1.0 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\n\r\n')
                     writer.close()
                     return
-                # URL: /audio/xxx.wav → 映射到 audio_base/xxx.wav
-                rel = url_path.lstrip('/').replace('audio/', '', 1) if url_path.startswith('/audio/') else url_path.lstrip('/')
+                # URL: /audio/xxx → audio_base/xxx, /model/xxx → audio_base/live2d_related/xxx
+                if url_path.startswith('/model/'):
+                    rel = url_path.lstrip('/').replace('model/', 'live2d_related/', 1)
+                elif url_path.startswith('/audio/'):
+                    rel = url_path.lstrip('/').replace('audio/', '', 1)
+                else:
+                    rel = url_path.lstrip('/')
                 filepath = os.path.normpath(os.path.join(audio_base, rel))
                 # 安全检查：确保不越出 audio_base
                 if not filepath.startswith(audio_base) or not os.path.isfile(filepath):
