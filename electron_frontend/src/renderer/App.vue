@@ -15,7 +15,9 @@ const isThinking = computed(() => stateMachine.value?.isThinking.value ?? false)
 // 模型切换（由 WS 事件驱动）
 const currentCharKey = ref('sakiko')
 const sakikoState = ref(true)  // true=黑祥(costume), false=白祥(base)，默认黑祥
+const customModelPath = ref('')  // 自定义模型路径（Qt 切模型时设置）
 const currentModelPath = computed(() => {
+  if (customModelPath.value) return customModelPath.value
   if (currentCharKey.value === 'sakiko' && sakikoState.value) {
     return '/live2d/sakiko/live2D_model_costume/3.model.json'
   }
@@ -81,6 +83,14 @@ function reloadModel(charKey: string, costumeMode: boolean | null = null) {
   stageKey.value++
 }
 
+function reloadCustomModel(path: string) {
+  disconnectWebSocket()
+  stateMachine.value?.destroy()
+  stateMachine.value = null
+  customModelPath.value = path
+  stageKey.value++
+}
+
 function onStateMachineReady(sm: Live2DStateMachine) {
   stateMachine.value = sm
   connectWebSocket(sm)
@@ -98,8 +108,12 @@ function connectWebSocket(sm: Live2DStateMachine) {
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
-      // switch_live2d: 切换角色
+      // switch_live2d: 切换角色或模型
       if (msg.type === 'switch_live2d' && msg.data?.character_name) {
+        const modelUrl = msg.data.model_url
+        // 有自定义模型 → 直接加载
+        if (modelUrl) { reloadCustomModel(modelUrl); return }
+        // 切换角色
         const m: Record<string,string> = {'祥子':'sakiko','爱音':'anon','素世':'soyo'}
         const key = m[msg.data.character_name]
         if (key && key !== currentCharKey.value) { reloadModel(key); return }
