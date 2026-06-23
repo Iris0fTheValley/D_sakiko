@@ -259,8 +259,7 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback_think_motion_version
     this.thinkMotionIsOver = false
-
-    this._playMotion('text_generating', 3)
+    setTimeout(() => this._playMotion('text_generating', 3), 0)
   }
 
   // ── checkIdleRecover: idle_motion 恢复（1:1 Pygame）──
@@ -273,8 +272,8 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback（无 onFinish）
     this.motionIsOver = false
-
-    this._playMotion('idle_motion', 1)
+    // 推迟到下一个微任务，避免同步调用 model.motion() 导致动画不播放
+    setTimeout(() => this._playMotion('idle_motion', 1), 0)
   }
 
   // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
@@ -289,7 +288,7 @@ export class Live2DStateMachine {
 
     // Pygame: StartRandomMotion("IDLE",1,onStart,onFinish)
     this.motionIsOver = false
-    this._playMotion('IDLE', 1)
+    setTimeout(() => this._playMotion('IDLE', 1), 0)
   }
 
   // ── checkClick ──
