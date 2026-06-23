@@ -16,6 +16,7 @@ import threading
 import sys
 import os
 from typing import Optional
+from urllib.parse import unquote
 
 # Python 3.9 兼容：全部用 Optional[X] 而非 X | None
 bridge_dir = os.path.dirname(os.path.abspath(__file__))
@@ -118,7 +119,7 @@ class Bridge:
                 if len(parts) < 2:
                     writer.close()
                     return
-                url_path = parts[1].split('?')[0]
+                url_path = unquote(parts[1].split('?')[0])
                 # 处理 CORS 预检请求
                 if parts[0] == 'OPTIONS':
                     writer.write(b'HTTP/1.0 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\n\r\n')
@@ -139,9 +140,46 @@ class Bridge:
                     return
                 with open(filepath, 'rb') as f:
                     data = f.read()
+                # 自动转换旧版 model.json 格式（rana → 13 组）
+                if filepath.endswith('.model.json'):
+                    try:
+                        import json as _json, copy as _copy
+                        model_data = _json.loads(data.decode('utf-8'))
+                        if 'rana' in model_data.get('motions', {}):
+                            new_data = _copy.deepcopy(model_data)
+                            new_data.pop('controllers', None)
+                            new_data.pop('hit_areas', None)
+                            rana = model_data['motions']['rana']
+                            motion_map = [
+                                ('happiness', 0, 6), ('sadness', 6, 12), ('anger', 12, 18),
+                                ('disgust', 18, 24), ('like', 24, 30), ('surprise', 30, 36),
+                                ('fear', 36, 42), ('IDLE', 42, 51), ('text_generating', 51, 54),
+                                ('bye', 54, 56), ('change_character', 56, 59),
+                                ('idle_motion', 59, 60), ('talking_motion', 60, 61)
+                            ]
+                            new_motions = {}
+                            for name, start, end in motion_map:
+                                new_motions[name] = rana[start:end]
+                            new_data['motions'] = new_motions
+                            data = _json.dumps(new_data, ensure_ascii=False).encode('utf-8')
+                    except Exception:
+                        pass  # 转换失败则用原始数据
+                # 根据扩展名决定 Content-Type
+                ext = os.path.splitext(filepath)[1].lower()
+                ct_map = {
+                    '.json': 'application/json',
+                    '.wav': 'audio/wav',
+                    '.mp3': 'audio/mpeg',
+                    '.png': 'image/png',
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.moc': 'application/octet-stream',
+                    '.mtn': 'application/octet-stream',
+                }
+                content_type = ct_map.get(ext, 'application/octet-stream')
                 response = b''.join([
                     b'HTTP/1.0 200 OK\r\n',
-                    b'Content-Type: audio/wav\r\n',
+                    f'Content-Type: {content_type}\r\n'.encode(),
                     b'Access-Control-Allow-Origin: *\r\n',
                     f'Content-Length: {len(data)}\r\n'.encode(),
                     b'\r\n',

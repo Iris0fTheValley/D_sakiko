@@ -73,14 +73,20 @@ export class Live2DStateMachine {
   private eventQueue: StateMachineEvent[] = []
   private modelLoaded = false
 
-  constructor(model: Live2DModel, ticker: Ticker, modelKey?: string) {
+  // ── 动态 motion 大小（从 model.json 读取，新角色自动适配）──
+  private dynamicSizes?: Record<string, number>
+
+  constructor(model: Live2DModel, ticker: Ticker, modelKey?: string, dynamicSizes?: Record<string, number>) {
     this.model = model
     this.ticker = ticker
     if (modelKey) this.modelKey = modelKey
+    this.dynamicSizes = dynamicSizes
     this.tickerCallback = () => this.onTickerUpdate()
   }
 
   private getMotionSize(group: string): number {
+    // 动态大小优先（从实际 model.json 读取），其次按角色名查表，最后全局默认
+    if (this.dynamicSizes && this.dynamicSizes[group] !== undefined) return this.dynamicSizes[group]
     return MODEL_SPECIFIC_SIZES[this.modelKey]?.[group] ?? MOTION_GROUP_SIZES[group] ?? 1
   }
 

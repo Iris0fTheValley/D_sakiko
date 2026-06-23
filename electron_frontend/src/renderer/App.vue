@@ -14,15 +14,8 @@ const isThinking = computed(() => stateMachine.value?.isThinking.value ?? false)
 
 // 模型切换（由 WS 事件驱动）
 const currentCharKey = ref('sakiko')
-const sakikoState = ref(true)  // true=黑祥(costume), false=白祥(base)，默认黑祥
-const customModelPath = ref('')  // 自定义模型路径（Qt 切模型时设置）
-const currentModelPath = computed(() => {
-  if (customModelPath.value) return customModelPath.value
-  if (currentCharKey.value === 'sakiko' && sakikoState.value) {
-    return '/live2d/sakiko/live2D_model_costume/3.model.json'
-  }
-  return `/live2d/${currentCharKey.value}/live2D_model/3.model.json`
-})
+// 所有模型统一走 Bridge HTTP，初始默认黑祥
+const customModelPath = ref('http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json')
 const stageKey = ref(0)
 
 // ── 悬停淡出（airi fade-on-hover）──
@@ -74,20 +67,11 @@ function toggleFadeOnHover() {
 provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
 provide('toggleFadeOnHover', toggleFadeOnHover)
 
-function reloadModel(charKey: string, costumeMode: boolean | null = null) {
+function reloadCustomModel(path: string, charKey?: string) {
   disconnectWebSocket()
-  stateMachine.value?.destroy()
-  stateMachine.value = null
-  currentCharKey.value = charKey
-  if (costumeMode !== null) sakikoState.value = costumeMode
-  stageKey.value++
-}
-
-function reloadCustomModel(path: string) {
-  disconnectWebSocket()
-  stateMachine.value?.destroy()
   stateMachine.value = null
   customModelPath.value = path
+  if (charKey) currentCharKey.value = charKey
   stageKey.value++
 }
 
@@ -108,21 +92,16 @@ function connectWebSocket(sm: Live2DStateMachine) {
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
-      // switch_live2d: 切换角色或模型
-      if (msg.type === 'switch_live2d' && msg.data?.character_name) {
-        const modelUrl = msg.data.model_url
-        // 有自定义模型 → 直接加载
-        if (modelUrl) { reloadCustomModel(modelUrl); return }
-        // 切换角色
-        const m: Record<string,string> = {'祥子':'sakiko','爱音':'anon','素世':'soyo'}
-        const key = m[msg.data.character_name]
-        if (key && key !== currentCharKey.value) { reloadModel(key); return }
+      // switch_live2d: 切换角色或模型（后端总是发送 model_url + character_folder）
+      if (msg.type === 'switch_live2d' && msg.data?.model_url) {
+        reloadCustomModel(msg.data.model_url, msg.data.character_folder)
+        return
       }
       // char_converted: 黑白祥 / mask
       if (msg.type === 'char_converted') {
-        const v = msg.data?.value
-        if (v === false || v === 0) { reloadModel('sakiko', false); return }
-        if (v === true || v === 1) { reloadModel('sakiko', true); return }
+        const { value, model_url } = msg.data || {}
+        if (model_url) { reloadCustomModel(model_url, 'sakiko'); return }
+        // maskoff：不切换模型，只推送到状态机播动画
       }
       sm.pushEvent({ type: msg.type, data: msg.data })
     } catch(e) { console.warn('[WS] Parse:', e) }
@@ -147,7 +126,7 @@ onUnmounted(() => disconnectWebSocket())
 <template>
   <div class="app-root">
     <div class="stage-area" :class="{ 'pointer-events-none': fadeOnHoverEnabled }" :style="{ transition: 'opacity 0.25s ease-in-out', opacity: shouldFade ? 0 : 1 }">
-      <Live2DStage :key="stageKey" :model-path="currentModelPath" :model-key="currentCharKey" @state-machine-ready="onStateMachineReady" />
+      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" @state-machine-ready="onStateMachineReady" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
     <Transition name="fade"><div v-if="userBubble" class="text-bubble user">{{ userBubble }}</div></Transition>
@@ -156,7 +135,7 @@ onUnmounted(() => disconnectWebSocket())
     <ControlsIsland />
 
     <!-- 窗口边框高亮 -->
-    <div v-if="nearBorder" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;pointer-events:none;border:4px solid rgba(59,130,246,0.5);border-radius:1rem;animation:pulse 2s infinite;"></div>
+    <div v-if="nearBorder" class="border-highlight"></div>
   </div>
 </template>
 
@@ -170,7 +149,24 @@ onUnmounted(() => disconnectWebSocket())
 .fade-enter-active,.fade-leave-active { transition:opacity .3s ease; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
 
-@keyframes pulse {
+</style>
+
+<style>
+/* unscoped：Vue scoped 会 hash @keyframes 名，导致 inline style / class 引用不到 */
+.border-highlight {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  pointer-events: none;
+  border: 4px solid rgba(59, 130, 246, 0.5);
+  border-radius: 1rem;
+  animation: border-pulse 2s infinite;
+}
+
+@keyframes border-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }

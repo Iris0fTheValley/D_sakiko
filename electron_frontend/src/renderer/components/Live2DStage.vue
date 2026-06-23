@@ -57,8 +57,22 @@ onMounted(async () => {
       }
     } catch (_e) { /* expression not supported */ }
 
+    // 动态读取 model.json 获取 motion 组大小（新角色自动适配）
+    let dynamicSizes: Record<string, number> | undefined
+    try {
+      const modelDef = await fetch(modelSrc).then(r => r.json())
+      const motions = modelDef.motions || {}
+      dynamicSizes = {}
+      for (const [group, entries] of Object.entries(motions)) {
+        if (Array.isArray(entries)) dynamicSizes[group] = entries.length
+      }
+      console.log('[Live2DStage] Dynamic motion sizes:', dynamicSizes)
+    } catch (e) {
+      console.warn('[Live2DStage] Could not read motion sizes, using defaults:', e)
+    }
+
     // 创建状态机并启动
-    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key)
+    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key, dynamicSizes)
     sm.start()
     emit('stateMachineReady', sm)
     console.log('[Live2DStage] Model loaded, state machine started')

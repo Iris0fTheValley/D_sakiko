@@ -40,6 +40,10 @@ export const MODEL_SPECIFIC_SIZES: Record<string, Record<string, number>> = {
     happiness: 6, sadness: 6, anger: 6, disgust: 6, like: 6, surprise: 6, fear: 6,
     IDLE: 9, text_generating: 3, bye: 2, change_character: 3, idle_motion: 1, talking_motion: 1,
   },
+  kasumi: {
+    happiness: 6, sadness: 6, anger: 6, disgust: 6, like: 6, surprise: 6, fear: 6,
+    IDLE: 9, text_generating: 3, bye: 2, change_character: 3, idle_motion: 1, talking_motion: 1,
+  },
 }
 
 /** 长音频运动循环参数 */
@@ -71,6 +75,6 @@ export const CLICK_THROTTLE_MS = 200
 
 /** WS 事件类型 */
 export interface StateMachineEvent {
-  type: 'emotion' | 'text_generating' | 'cancel_turn' | 'user_text' | 'bye' | 'switch_live2d'
+  type: 'emotion' | 'text_generating' | 'cancel_turn' | 'user_text' | 'bye' | 'switch_live2d' | 'char_converted' | 'expression'
   data: any
 }
