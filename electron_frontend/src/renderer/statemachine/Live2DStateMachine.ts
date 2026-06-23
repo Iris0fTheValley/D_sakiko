@@ -250,8 +250,8 @@ export class Live2DStateMachine {
 
     // Pygame: onStartCallback（无 onFinish）
     this.motionIsOver = false
-    // idle_motion 动画文件无效，用 IDLE 替代（noFinishReset 防重置定时器）
-    this._playMotion('IDLE', 1, true)
+    // idle_motion 用 IDLE[0] 固定短动画，对标原版的快速循环
+    this._playMotion('IDLE', 1, true, 0)
   }
 
   // ── checkTimedIdle: 25s 待机 IDLE（1:1 Pygame）──
@@ -316,10 +316,10 @@ export class Live2DStateMachine {
   }
 
   // ── 动作播放 + 回调 ──
-  private _playMotion(group: string, priority: number, noFinishReset?: boolean): void {
+  private _playMotion(group: string, priority: number, noFinishReset?: boolean, fixedIdx?: number): void {
     const size = this.getMotionSize(group)
     if (size <= 0) return
-    const idx = Math.floor(Math.random() * size)
+    const idx = fixedIdx !== undefined ? fixedIdx : Math.floor(Math.random() * size)
     this.currentMotionId++
     const motionId = this.currentMotionId
 
