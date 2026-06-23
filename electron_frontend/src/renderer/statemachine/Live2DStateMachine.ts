@@ -113,7 +113,13 @@ export class Live2DStateMachine {
   private onTickerUpdate(): void {
     const now = performance.now()
     this.processEvents(now)
+    // 内置动作调度（Pygame 对照时可关闭，独立模式启用）
+    this.checkThinking(now)
+    this.checkIdleRecover(now)
+    this.checkTimedIdle(now)
+    this.checkClick(now)
     this.turnMotionComplete = !this.audioPlaying
+    this.checkLongAudioLoop(now)
     this.updateEyeOpen(now)
   }
 
@@ -123,37 +129,56 @@ export class Live2DStateMachine {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
-          // emotion 事件：只处理文本和音频，动作完全由 Pygame 的 _emit_motion 驱动
-          const { audio, text } = event.data
+          // emotion 事件：驱动动作 + 文本 + 音频
+          const { label, audio, text } = event.data
 
+          if (label === 'bye') {
+            this._resetLongAudio()
+            if (!this.ifBye) {
+              this.motionIsOver = false
+              this._playMotion('bye', 3)
+            }
+            this.ifBye = true
+            setTimeout(() => { try { (window as any).electronAPI?.closeWindow() } catch (_) { window.close() } }, BYE_TIMEOUT_MS)
+            break
+          }
+
+          const group = EMOTION_MAP[label]
           this.stopAudio()
           this._resetLongAudio()
+          this.thinkMotionIsOver = true  // 有情感标签 → 停止思考
 
+          // 播放音频
           if (audio) {
             this.currentAudioId++
-            const audioId = this.currentAudioId
-            const audioEl = new Audio()
-            audioEl.crossOrigin = 'anonymous'
-            audioEl.src = audio
-            this.currentAudio = audioEl
+            const aid = this.currentAudioId
+            const el = new Audio()
+            el.crossOrigin = 'anonymous'
+            el.src = audio
+            this.currentAudio = el
             this.audioPlaying = true
-            audioEl.play().catch(() => {})
-            this._setupLipSync(audioEl, audioId)
-            audioEl.addEventListener('loadedmetadata', () => {
-              if (audioId !== this.currentAudioId) return
-              if (audioEl.duration > LONG_AUDIO_THRESHOLD_SECONDS) {
+            el.play().catch(() => {})
+            this._setupLipSync(el, aid)
+            el.addEventListener('loadedmetadata', () => {
+              if (aid !== this.currentAudioId) return
+              if (el.duration > LONG_AUDIO_THRESHOLD_SECONDS) {
                 this.longAudioActive = true
                 this.longAudioNextMotionAt = now + LONG_AUDIO_REPEAT_DELAY_SECONDS * 1000
-                // group 由后续 Pygame motion 事件提供
+                this.longAudioGroup = group || ''
               }
             })
-            audioEl.addEventListener('ended', () => {
-              if (audioId !== this.currentAudioId) return
+            el.addEventListener('ended', () => {
+              if (aid !== this.currentAudioId) return
               this.audioPlaying = false
               this.currentAudio = null
             })
           }
 
+          // 启动动作
+          if (group) {
+            this.motionIsOver = false
+            this._playMotion(group, 3)
+          }
           if (text) this.textBubble.value = text
           break
         }
@@ -199,9 +224,12 @@ export class Live2DStateMachine {
         }
 
         case 'motion': {
-          // Pygame _emit_motion 驱动所有动作（不跳过任何组）
+          // Pygame _emit_motion 事件：只处理 talking/change/Mask 等额外组
           const { group } = event.data
           if (!group) break
+          const emotionGroups = new Set(Object.values(EMOTION_MAP))
+          const builtIn = new Set(['idle_motion', 'IDLE', 'text_generating', 'bye'])
+          if (emotionGroups.has(group) || builtIn.has(group)) break
           this.motionIsOver = false
           this._playMotion(group, 3)
           break
