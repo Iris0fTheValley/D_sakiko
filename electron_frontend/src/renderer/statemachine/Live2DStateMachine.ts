@@ -84,23 +84,16 @@ export class Live2DStateMachine {
 
   /** 注册 Ticker 回调，开始运行 */
   start(): void {
-    this.ticker.add(this.tickerCallback)
+    // 高优先级确保在模型更新之后执行（嘴型覆盖动作参数）
+    this.ticker.add(this.tickerCallback, undefined, 30 as any)
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
     // 查找口型参数索引
     try {
-      const im = this.model.internalModel as any
-      console.log('[StateMachine] internalModel type:', typeof im, 'keys:', Object.keys(im || {}).slice(0,5).join(','))
-      const cm = im?.coreModel
-      console.log('[StateMachine] coreModel exists:', !!cm, 'has getParamIndex:', !!(cm && cm.getParamIndex))
-      if (cm && cm.getParamIndex) {
+      const cm = (this.model.internalModel as any)?.coreModel
+      if (cm?.getParamIndex) {
         this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
         console.log('[StateMachine] Mouth param index:', this._mouthParamIndex)
-        // 测试写入
-        if (this._mouthParamIndex >= 0) {
-          cm.setParamFloat(this._mouthParamIndex, 0.5)
-          console.log('[StateMachine] Mouth param test write OK')
-        }
       }
     } catch (e) {
       console.error('[StateMachine] Mouth param lookup failed:', e)
@@ -123,7 +116,7 @@ export class Live2DStateMachine {
 
   /** 移除 Ticker 回调，停止运行 */
   destroy(): void {
-    this.ticker.remove(this.tickerCallback)
+    this.ticker.remove(this.tickerCallback, undefined)
     this.stopAudio()
     if (this.audioContext) {
       try { this.audioContext.close() } catch (_e) { /* ignore */ }
