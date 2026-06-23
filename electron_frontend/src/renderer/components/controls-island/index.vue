@@ -9,6 +9,7 @@ declare const electronAPI: {
   toggleDevTools: () => Promise<boolean>
   toggleAlwaysOnTop: () => Promise<boolean>
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
+  getMousePosition: () => Promise<{ x: number, y: number }>
 }
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -78,19 +79,38 @@ async function toggleAlwaysOnTop() {
 }
 
 const fadeOnHover = ref(false)
+let _mousePollTimer: ReturnType<typeof setInterval> | null = null
 
 async function applyMouseThrough() {
-  // 鼠标在面板上或面板展开时不穿透
   const ignore = fadeOnHover.value && !expanded.value && isOutside.value
   try { await electronAPI.setIgnoreMouseEvents(ignore, { forward: true }) } catch {}
 }
 
 async function toggleFadeOnHover() {
   fadeOnHover.value = !fadeOnHover.value
+  if (fadeOnHover.value) {
+    // 启动 IPC 轮询鼠标位置（穿透后 renderer mousemove 不触发）
+    _mousePollTimer = setInterval(async () => {
+      try {
+        const pos = await electronAPI.getMousePosition()
+        if (!islandRef.value) return
+        const rect = islandRef.value.getBoundingClientRect()
+        const winRect = { left: window.screenX, top: window.screenY, right: window.screenX + window.innerWidth, bottom: window.screenY + window.innerHeight }
+        // 屏幕坐标转窗口内坐标
+        const insideIsland = pos.x >= winRect.left + rect.left && pos.x <= winRect.left + rect.right
+                          && pos.y >= winRect.top + rect.top && pos.y <= winRect.top + rect.bottom
+        if (insideIsland !== !isOutside.value) {
+          isOutside.value = !insideIsland
+        }
+      } catch {}
+    }, 200)
+  } else {
+    if (_mousePollTimer) { clearInterval(_mousePollTimer); _mousePollTimer = null }
+  }
   await applyMouseThrough()
 }
 
-// 鼠标位置变化时（isOutside 由全局 mousemove 追踪）重新判断穿透
+// 面板展开/关闭时重新判断
 watch([isOutside, expanded], () => { if (fadeOnHover.value) applyMouseThrough() })
 
 const adjustStyleClasses = computed(() => {

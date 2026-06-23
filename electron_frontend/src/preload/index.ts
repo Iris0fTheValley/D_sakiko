@@ -10,6 +10,9 @@ const api = {
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) =>
     ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
 
+  getMousePosition: () =>
+    ipcRenderer.invoke('get-mouse-position'),
+
   toggleAlwaysOnTop: () =>
     ipcRenderer.invoke('toggle-always-on-top'),
 }

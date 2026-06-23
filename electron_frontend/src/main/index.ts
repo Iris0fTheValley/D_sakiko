@@ -69,6 +69,12 @@ function createWindow() {
     mainWindow?.setIgnoreMouseEvents(ignore, options)
   })
 
+  // 获取鼠标屏幕坐标（穿透模式下 renderer 收不到 mousemove）
+  const { screen } = require('electron')
+  ipcMain.handle('get-mouse-position', () => {
+    return screen.getCursorScreenPoint()
+  })
+
   // 置顶
   ipcMain.handle('toggle-always-on-top', () => {
     if (!mainWindow) return false
