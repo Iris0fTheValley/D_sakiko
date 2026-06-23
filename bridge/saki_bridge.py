@@ -52,7 +52,12 @@ class Bridge:
         loop.run_until_complete(self.ws.start())
         # 启动音频 HTTP 静态文件服务
         if self.audio_base:
-            loop.run_until_complete(self._start_audio_server())
+            try:
+                loop.run_until_complete(self._start_audio_server())
+            except OSError as e:
+                print(f'[Audio HTTP] Failed to start on port {AUDIO_PORT}: {e}')
+            except Exception as e:
+                print(f'[Audio HTTP] Failed: {e}')
         # WS 服务启动后，开启 reader 线程
         self._reader_thread = threading.Thread(
             target=self._reader, daemon=True
@@ -96,6 +101,8 @@ class Bridge:
     async def _start_audio_server(self):
         """启动 HTTP 静态文件服务，供 Electron 加载音频文件"""
         audio_base = os.path.abspath(self.audio_base)
+        print(f'[Audio HTTP] Base dir: {audio_base}', flush=True)
+        print(f'[Audio HTTP] Starting on port {AUDIO_PORT}...', flush=True)
         async def handle_audio(reader, writer):
             try:
                 request = await asyncio.wait_for(reader.read(4096), timeout=5)
