@@ -38,6 +38,7 @@ export class Live2DStateMachine {
   private mouthOpenValue = 0
   private lipSyncN = 1.4  // 系数，与 Pygame 一致
   private _mouthParamIndex: number = -1  // PARAM_MOUTH_OPEN_Y 的参数索引
+  private _lappModel: any = null         // LAppModel 实例（有参数缓存）
   private audioContext: AudioContext | null = null
   private analyserNode: AnalyserNode | null = null
 
@@ -88,19 +89,29 @@ export class Live2DStateMachine {
     this.ticker.add(this.tickerCallback, undefined, 30 as any)
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
-    // 查找口型参数索引和设置 API
+    // 查找口型参数 API — coreModel.setParamFloat 是底层 C++ 模型
+    // LAppModel 有自己的参数缓存，渲染用的缓存。需要找到 LAppModel 实例
     try {
       const im = this.model.internalModel as any
       const cm = im?.coreModel
-      // 尝试找 LAppModel 级别的参数设置方法
-      const setMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(im))
-        .filter(k => k.toLowerCase().includes('param') || k.toLowerCase().includes('set'))
-      console.log('[StateMachine] internalModel param methods:', setMethods)
-      // 也检查 coreModel 原型
-      if (cm) {
-        const cmMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(cm))
-          .filter(k => k.toLowerCase().includes('param') || k.toLowerCase().includes('set'))
-        console.log('[StateMachine] coreModel param methods:', cmMethods)
+      // 找 LAppModel（可能挂在 internalModel 上）
+      const candidates = ['_lappModel', 'lappModel', '_model', '__model', 'live2DModel', '_live2d', '__lapp']
+      for (const key of candidates) {
+        if (im[key] && typeof im[key].SetParameterValue === 'function') {
+          console.log('[StateMachine] Found LAppModel at internalModel.' + key)
+          this._lappModel = im[key]
+          break
+        }
+      }
+      // 也检查 coreModel 身上
+      if (!this._lappModel && cm && typeof cm.SetParameterValue === 'function') {
+        console.log('[StateMachine] coreModel IS LAppModel (has SetParameterValue)')
+        this._lappModel = cm
+      }
+      if (!this._lappModel) {
+        // 全局搜索
+        const globalKeys = Object.keys(window).filter(k => k.toLowerCase().includes('live2d') || k.toLowerCase().includes('lapp'))
+        console.log('[StateMachine] Global Live2D keys:', globalKeys)
       }
       if (cm?.getParamIndex) {
         this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
@@ -109,6 +120,7 @@ export class Live2DStateMachine {
     } catch (e) {
       console.error('[StateMachine] Mouth param lookup failed:', e)
     }
+    this._lappModel = null as any
     // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
     try {
       // @ts-expect-error internalModel API not fully typed
@@ -535,14 +547,13 @@ export class Live2DStateMachine {
   private _setMouthParam(value: number): void {
     if (this._mouthParamIndex < 0) return
     try {
-      const cm = (this.model.internalModel as any)?.coreModel
-      if (cm?.setParamFloat) {
-        cm.setParamFloat(this._mouthParamIndex, value)
-        // 每 180 帧（约 3 秒）验证一次写入是否生效
-        if (++this._mouthVerifyCount % 180 === 0 && cm.getParamFloat) {
-          const readback = cm.getParamFloat(this._mouthParamIndex)
-          console.log('[StateMachine] Mouth set:', value.toFixed(3), 'readback:', readback, 'idx:', this._mouthParamIndex)
-        }
+      // 优先用 LAppModel.SetParameterValue（更新渲染缓存）
+      if (this._lappModel?.SetParameterValue) {
+        this._lappModel.SetParameterValue('PARAM_MOUTH_OPEN_Y', value)
+      } else {
+        // fallback: coreModel.setParamFloat（只写底层，可能不渲染）
+        const cm = (this.model.internalModel as any)?.coreModel
+        cm?.setParamFloat?.(this._mouthParamIndex, value)
       }
     } catch (e) {
       console.error('[StateMachine] setParamFloat error:', e)
