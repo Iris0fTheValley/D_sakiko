@@ -282,10 +282,15 @@ export class Live2DStateMachine {
 
         case 'text_generating': {
           const active = event.data.active === true
+          const wasThinking = this.isThinking.value
           this.isThinking.value = active
           if (active) {
             this.thinkInterval = THINK_INTERVAL_FIRST
             this.lastThinkTime = now
+            // 首次进入思考状态时立即触发一次思考动作（不受 1s 间隔限制）
+            if (!wasThinking) {
+              this._triggerThinkingMotion()
+            }
           } else {
             this.thinkInterval = THINK_INTERVAL_FIRST
           }
@@ -366,8 +371,11 @@ export class Live2DStateMachine {
     ) {
       return
     }
-    // 不检查 motionInProgress — 思考动作（优先级 3）可打断空闲（优先级 1），匹配 Pygame
-    this.lastThinkTime = now
+    this._triggerThinkingMotion()
+  }
+
+  private _triggerThinkingMotion(): void {
+    this.lastThinkTime = performance.now()
     this.thinkInterval = THINK_INTERVAL_SUBSEQUENT
     const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))
     this.motionInProgress = true
@@ -452,7 +460,7 @@ export class Live2DStateMachine {
   reset(): void {
     this.stopAudio()
     this.motionInProgress = false
-    this.idleRecoverDeadline = 0
+    this.idleRecoverDeadline = 1  // 设为过去时间，重置后立即触发 idle（不设 0）
     this.lastIdleTime = performance.now()
     this.lastThinkTime = 0
     this.thinkInterval = THINK_INTERVAL_FIRST
