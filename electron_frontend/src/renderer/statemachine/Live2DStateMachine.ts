@@ -80,6 +80,19 @@ export class Live2DStateMachine {
     this.ticker.add(this.tickerCallback)
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
+    // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
+    try {
+      // @ts-expect-error internalModel API not fully typed
+      if (this.model.internalModel?.setAutoBlinkEnable) {
+        // @ts-expect-error
+        this.model.internalModel.setAutoBlinkEnable(true)
+      }
+      // @ts-expect-error
+      if (this.model.internalModel?.setAutoBreathEnable) {
+        // @ts-expect-error
+        this.model.internalModel.setAutoBreathEnable(true)
+      }
+    } catch (_e) { /* ignore */ }
     console.log('[StateMachine] Started')
   }
 
@@ -181,6 +194,9 @@ export class Live2DStateMachine {
 
           this.currentMotionId++
           const motionId = this.currentMotionId
+
+          // 停止正在进行的睁眼过渡（Pygame onStartCallback 行为）
+          this.eyeOpenPending = false
 
           const size = this.getMotionSize(group)
           if (size <= 0) {

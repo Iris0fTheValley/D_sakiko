@@ -38,6 +38,7 @@ onMounted(async () => {
 
   try {
     const modelSrc = props.modelPath || '/live2d/sakiko/live2D_model/3.model.json'
+    const key = props.modelKey || 'sakiko'
     const live2dModel = await Live2DModel.from(modelSrc, { autoInteract: false })
 
     // 调整位置和大小
@@ -57,7 +58,6 @@ onMounted(async () => {
     } catch (_e) { /* expression not supported */ }
 
     // 创建状态机并启动
-    const key = props.modelKey || 'sakiko'
     sm = new Live2DStateMachine(live2dModel, Ticker.shared, key)
     sm.start()
     emit('stateMachineReady', sm)
