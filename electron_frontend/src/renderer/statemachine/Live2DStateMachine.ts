@@ -37,6 +37,7 @@ export class Live2DStateMachine {
   private mouthSyncFrameCount = 0
   private mouthOpenValue = 0
   private lipSyncN = 1.4  // 系数，与 Pygame 一致
+  private _mouthParamIndex: number = -1  // PARAM_MOUTH_OPEN_Y 的参数索引
   private audioContext: AudioContext | null = null
   private analyserNode: AnalyserNode | null = null
 
@@ -86,37 +87,15 @@ export class Live2DStateMachine {
     this.ticker.add(this.tickerCallback)
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
-    // 调试：列出可用参数
+    // 查找口型参数索引
     try {
-      // @ts-expect-error
-      const im = this.model.internalModel
-      if (im && im.getParameterCount) {
-        // @ts-expect-error
-        const count = im.getParameterCount()
-        const mouthParams: string[] = []
-        for (let i = 0; i < count; i++) {
-          // @ts-expect-error
-          const p = im.getParameter(i)
-          const pid = p?.id || p?.ID || ''
-          if (pid.toLowerCase().includes('mouth')) {
-            mouthParams.push(pid)
-          }
-        }
-        if (mouthParams.length > 0) {
-          console.log('[StateMachine] Mouth parameters found:', mouthParams)
-        } else {
-          console.log('[StateMachine] No mouth params in', count, 'params. Sampling first 5:', 
-            Array.from({length: Math.min(5, count)}, (_, i) => {
-              // @ts-expect-error
-              const p = im.getParameter(i)
-              return p?.id || p?.ID || p
-            }))
-        }
-      } else {
-        console.log('[StateMachine] internalModel has no getParameterCount. Keys:', Object.keys(im || {}).slice(0, 10))
+      const cm = (this.model.internalModel as any)?.coreModel
+      if (cm && cm.getParamIndex) {
+        this._mouthParamIndex = cm.getParamIndex('PARAM_MOUTH_OPEN_Y')
+        console.log('[StateMachine] Mouth param index:', this._mouthParamIndex)
       }
     } catch (e) {
-      console.log('[StateMachine] Param debug failed:', e)
+      console.log('[StateMachine] Mouth param lookup failed:', e)
     }
     // 确保自动眨眼和呼吸启用（与 Pygame SetAutoBlinkEnable/SetAutoBreathEnable 一致）
     try {
@@ -508,27 +487,21 @@ export class Live2DStateMachine {
 
   /** 每帧更新口型参数（每 3 帧一次，与 Pygame 的 is_update_mouth_sync % 3 == 0 一致） */
   private updateMouthSync(): void {
-    if (!this.audioPlaying || !this.analyserNode) {
+    if (!this.audioPlaying || !this.analyserNode || this._mouthParamIndex < 0) {
       // 无音频时衰减口型
       if (this.mouthOpenValue > 0.005) {
         this.mouthOpenValue *= 0.85
-        try {
-          // @ts-expect-error internalModel API not fully typed
-          this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', this.mouthOpenValue)
-        } catch (_e) { /* ignore */ }
+        this._setMouthParam(this.mouthOpenValue)
       } else if (this.mouthOpenValue > 0) {
         this.mouthOpenValue = 0
-        try {
-          // @ts-expect-error
-          this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', 0)
-        } catch (_e) { /* ignore */ }
+        this._setMouthParam(0)
       }
       return
     }
     this.mouthSyncFrameCount++
     if (this.mouthSyncFrameCount % 3 !== 0) return
 
-    // 每 60 帧（约 1 秒）打印一次 RMS 调试
+    // 每 60 帧打印一次 RMS 调试
     const debug = this.mouthSyncFrameCount % 60 === 0
 
     try {
@@ -541,9 +514,16 @@ export class Live2DStateMachine {
       }
       const rms = Math.sqrt(sum / bufferLength)
       this.mouthOpenValue = Math.min(1.0, rms * this.lipSyncN)
-      if (debug) console.log('[LipSync] RMS:', rms.toFixed(4), 'mouth:', this.mouthOpenValue.toFixed(3), 'audioPlaying:', this.audioPlaying)
-      // @ts-expect-error internalModel API not fully typed
-      this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', this.mouthOpenValue)
+      if (debug) console.log('[LipSync] RMS:', rms.toFixed(4), 'mouth:', this.mouthOpenValue.toFixed(3))
+      this._setMouthParam(this.mouthOpenValue)
+    } catch (_e) { /* ignore */ }
+  }
+
+  /** 通过 coreModel 设置口型参数 */
+  private _setMouthParam(value: number): void {
+    if (this._mouthParamIndex < 0) return
+    try {
+      ;(this.model.internalModel as any)?.coreModel?.setParamFloat(this._mouthParamIndex, value)
     } catch (_e) { /* ignore */ }
   }
 }
