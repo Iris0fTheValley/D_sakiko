@@ -86,9 +86,11 @@ class Bridge:
     def _motion_reader(self):
         """从 Pygame 进程的 motion_event_queue 读取动作/表情事件 → WS 广播"""
         loop = self._loop
+        print('[Bridge] Motion reader started', flush=True)
         while True:
             try:
                 event = self.motion_q.get(timeout=5)
+                print(f'[Bridge] Motion event: {event.get("group", event.get("type", "?"))}', flush=True)
             except Exception:
                 continue
             if event is None:
