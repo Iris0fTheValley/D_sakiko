@@ -83,8 +83,8 @@ export class Live2DStateMachine {
   start(): void {
     // 高优先级确保在模型更新之后执行（嘴型覆盖动作参数）
     this.ticker.add(this.tickerCallback, undefined, 30 as any)
-    // 设置初始空闲恢复 deadline，启动后 2.5s 触发首次 idle_motion（匹配 Pygame 行为）
-    this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
+    // 设置初始空闲恢复 deadline 为过去时间，启动后立即触发首次 idle_motion（匹配 Pygame 全局计时器行为）
+    this.idleRecoverDeadline = 1  // 毫秒时间戳，永远在过去
     this.lastIdleTime = performance.now()
     this.modelLoaded = true
     // 查找口型参数 API — coreModel.setParamFloat 是底层 C++ 模型
@@ -362,17 +362,21 @@ export class Live2DStateMachine {
   private checkThinkingMotion(now: number): void {
     if (
       !this.isThinking.value ||
-      this.motionInProgress ||
       now - this.lastThinkTime <= this.thinkInterval * 1000
     ) {
       return
     }
+    // 不检查 motionInProgress — 思考动作（优先级 3）可打断空闲（优先级 1），匹配 Pygame
     this.lastThinkTime = now
-    this.thinkInterval = THINK_INTERVAL_SUBSEQUENT  // 立即切换为 15s，不等动作播完
+    this.thinkInterval = THINK_INTERVAL_SUBSEQUENT
     const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))
+    this.motionInProgress = true
     this.model.motion('text_generating', idx, 3).then(() => {
-      // 不更新 idleRecoverDeadline（匹配 Pygame: text_generating 的 onFinish 不重置 idle 计时器）
-    }).catch((e) => console.warn('[StateMachine] Thinking motion failed:', e))
+      this.motionInProgress = false
+    }).catch((e) => {
+      console.warn('[StateMachine] Thinking motion failed:', e)
+      this.motionInProgress = false
+    })
   }
 
   private checkLongAudioLoop(now: number): void {
