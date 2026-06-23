@@ -496,6 +496,9 @@ export class Live2DStateMachine {
     this.mouthSyncFrameCount++
     if (this.mouthSyncFrameCount % 3 !== 0) return
 
+    // 每 60 帧（约 1 秒）打印一次 RMS 调试
+    const debug = this.mouthSyncFrameCount % 60 === 0
+
     try {
       const bufferLength = this.analyserNode.fftSize
       const dataArray = new Float32Array(bufferLength)
@@ -506,6 +509,7 @@ export class Live2DStateMachine {
       }
       const rms = Math.sqrt(sum / bufferLength)
       this.mouthOpenValue = Math.min(1.0, rms * this.lipSyncN)
+      if (debug) console.log('[LipSync] RMS:', rms.toFixed(4), 'mouth:', this.mouthOpenValue.toFixed(3), 'audioPlaying:', this.audioPlaying)
       // @ts-expect-error internalModel API not fully typed
       this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', this.mouthOpenValue)
     } catch (_e) { /* ignore */ }
