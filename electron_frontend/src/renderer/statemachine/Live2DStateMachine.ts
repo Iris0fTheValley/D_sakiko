@@ -110,10 +110,11 @@ export class Live2DStateMachine {
   }
 
   // ── 主循环：每帧由 Ticker 调用 ──
+  private _dbgFrame = 0
   private onTickerUpdate(): void {
+    this._dbgFrame++
     const now = performance.now()
     this.processEvents(now)
-    // 内置动作调度（Pygame 对照时可关闭，独立模式启用）
     this.checkThinking(now)
     this.checkIdleRecover(now)
     this.checkTimedIdle(now)
@@ -121,6 +122,14 @@ export class Live2DStateMachine {
     this.turnMotionComplete = !this.audioPlaying
     this.checkLongAudioLoop(now)
     this.updateEyeOpen(now)
+    // 每秒打印一次状态
+    if (this._dbgFrame % 60 === 1) {
+      console.log('[SM] f:', this._dbgFrame,
+        'mOver:', this.motionIsOver, 'tOver:', this.thinkMotionIsOver,
+        'audio:', this.audioPlaying, 'thinking:', this.isThinking.value,
+        'idleRecover:', (now - this.idleRecoverTimer).toFixed(0) + 'ms',
+        'lastSaved:', (now - this.lastSavedTime).toFixed(0) + 'ms')
+    }
   }
 
   // ── processEvents: 消费 WS 事件队列 ──
