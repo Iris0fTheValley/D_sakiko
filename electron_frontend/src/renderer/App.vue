@@ -151,8 +151,10 @@ onUnmounted(() => disconnectWebSocket())
       leave-to-class="opacity-50"
     >
       <div v-if="nearBorder" class="pointer-events-none fixed inset-0 z-999">
-        <div class="h-full w-full border-4 border-primary/50 rounded-2xl animate-pulse" />
+        <div class="h-full w-full border-8 border-red-500 rounded-2xl" />
       </div>
+      <!-- DEBUG: always show to test CSS -->
+      <div class="pointer-events-none fixed inset-0 z-999" style="border: 4px solid lime; border-radius: 1rem;"></div>
     </Transition>
   </div>
 </template>
