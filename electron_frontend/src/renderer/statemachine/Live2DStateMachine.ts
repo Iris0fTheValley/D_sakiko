@@ -58,9 +58,6 @@ export class Live2DStateMachine {
   private longAudioNextMotionAt = 0
   private longAudioTriggeredCount = 0
 
-  // ── 外部动作驱动模式（Pygame _emit_motion 接管时禁用内置 Ticker 检查）──
-  private externalMotionDriver = false
-
   // ── 睁眼过渡 ──
   private eyeOpenPending = false
   private eyeOpenStartTime = 0
@@ -151,13 +148,10 @@ export class Live2DStateMachine {
   private onTickerUpdate(): void {
     const now = performance.now()
     this.processEvents(now)
-    // 外部动作驱动模式（Pygame _emit_motion 接管）：跳过内置空闲/思考/长音频检查
-    if (!this.externalMotionDriver) {
-      this.checkIdleRecover(now)
-      this.checkTimedIdle(now)
-      this.checkThinkingMotion(now)
-      this.checkLongAudioLoop(now)
-    }
+    this.checkIdleRecover(now)
+    this.checkTimedIdle(now)
+    this.checkThinkingMotion(now)
+    this.checkLongAudioLoop(now)
     this.updateEyeOpen(now)
   }
 
@@ -168,8 +162,9 @@ export class Live2DStateMachine {
       const event = this.eventQueue.shift()!
       switch (event.type) {
         case 'emotion': {
-          // emotion 事件只处理文本和音频，动作由 motion 事件驱动（来自 Pygame _emit_motion）
-          const { audio, text } = event.data
+          // 情感标签 → 动作组 → 随机动作 + 音频 + 文字
+          const { label, audio, text } = event.data
+          const group = EMOTION_MAP[label]
 
           // 打断当前音频
           if (this.currentAudio) {
@@ -178,11 +173,36 @@ export class Live2DStateMachine {
             this.audioPlaying = false
           }
 
-          // 重置计时器（新动作触发时重置所有空闲计时）
+          // 重置计时器
           this.idleRecoverDeadline = 0
           this.lastIdleTime = now
           this.longAudioActive = false
           this.longAudioTriggeredCount = 0
+
+          // 启动动作（如果情感标签有效）
+          if (group) {
+            this.currentMotionId++
+            const motionId = this.currentMotionId
+            this.eyeOpenPending = false
+            const size = this.getMotionSize(group)
+            const idx = Math.floor(Math.random() * size)
+            this.motionInProgress = true
+            this.model.motion(group, idx, 3).then(() => {
+              if (motionId !== this.currentMotionId) return
+              this.motionInProgress = false
+              this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
+              this.eyeOpenPending = true
+              this.eyeOpenStartTime = performance.now()
+              try {
+                const cm = (this.model.internalModel as any)?.coreModel
+                this.eyeOpenStartL = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1) ?? 1
+                this.eyeOpenStartR = cm?.getParamFloat?.(cm.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1) ?? 1
+              } catch (_e) { this.eyeOpenStartL = 1; this.eyeOpenStartR = 1 }
+            }).catch((e) => {
+              console.warn('[StateMachine] Emotion motion failed:', e)
+              if (motionId === this.currentMotionId) this.reset()
+            })
+          }
 
           // 并行播放音频
           if (audio) {
@@ -220,13 +240,8 @@ export class Live2DStateMachine {
         }
 
         case 'motion': {
-          // motion 事件来自 Pygame 的 _emit_motion：{ group, priority, timestamp }
-          // 首次收到即切换为外部动作驱动模式，禁用 Electron 内置空闲/思考检查
-          if (!this.externalMotionDriver) {
-            this.externalMotionDriver = true
-            console.log('[StateMachine] External motion driver mode (Pygame _emit_motion)')
-          }
-          const { group, priority } = event.data
+          // motion 事件保留兼容（对照模式时 Pygame _emit_motion 发来）
+          const { group } = event.data
           if (!group) break
 
           this.currentMotionId++
@@ -243,7 +258,7 @@ export class Live2DStateMachine {
           const idx = Math.floor(Math.random() * size)
 
           this.motionInProgress = true
-          const motionPromise = this.model.motion(group, idx, priority ?? 3)
+          const motionPromise = this.model.motion(group, idx, 3)
 
           // 更新长音频 group（音频由 emotion 事件启动时标记）
           if (this.longAudioActive && group !== 'idle_motion' && group !== 'IDLE') {
