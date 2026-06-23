@@ -19,9 +19,6 @@ from typing import Optional
 
 # Python 3.9 兼容：全部用 Optional[X] 而非 X | None
 bridge_dir = os.path.dirname(os.path.abspath(__file__))
-gpt_dir = os.path.join(bridge_dir, '..', '..', 'DSakiko3.10', 'GPT_SoVITS')
-gpt_dir = os.path.normpath(gpt_dir)
-sys.path.insert(0, gpt_dir)
 sys.path.insert(0, bridge_dir)
 
 from ws_server import WSServer

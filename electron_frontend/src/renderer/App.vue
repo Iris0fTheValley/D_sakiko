@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { shallowRef, ref, watch, computed } from 'vue'
+import { shallowRef, ref, onMounted, onUnmounted, computed } from 'vue'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
-import { useWebSocket } from './composables/useWebSocket'
 import type { Live2DStateMachine } from './statemachine/Live2DStateMachine'
 
 const stateMachine = shallowRef<Live2DStateMachine | null>(null)
@@ -16,14 +15,80 @@ const isThinking = computed(() => stateMachine.value?.isThinking.value ?? false)
 
 function onStateMachineReady(sm: Live2DStateMachine) {
   stateMachine.value = sm
+  // 状态机就绪后连接 WebSocket
+  connectWebSocket(sm)
 }
 
-// 状态机就绪后建立 WS 连接
-watch(stateMachine, (sm) => {
-  if (sm) {
-    const { connected } = useWebSocket(sm)
-    watch(connected, (val) => { wsConnected.value = val })
+// ── WebSocket 连接 ──
+let ws: WebSocket | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectDelay = 1000
+const WS_URL = 'ws://localhost:9876'
+
+function connectWebSocket(sm: Live2DStateMachine) {
+  if (ws?.readyState === WebSocket.OPEN) return
+
+  try {
+    ws = new WebSocket(WS_URL)
+  } catch (e) {
+    console.error('[WS] Failed to create WebSocket:', e)
+    scheduleReconnect(sm)
+    return
   }
+
+  ws.onopen = () => {
+    wsConnected.value = true
+    reconnectDelay = 1000
+    console.log('[WS] Connected')
+    sm.reset()
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      sm.pushEvent({ type: msg.type, data: msg.data })
+    } catch (e) {
+      console.warn('[WS] Failed to parse message:', e)
+    }
+  }
+
+  ws.onclose = () => {
+    wsConnected.value = false
+    scheduleReconnect(sm)
+  }
+
+  ws.onerror = () => {
+    ws?.close()
+  }
+}
+
+function scheduleReconnect(sm: Live2DStateMachine) {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = setTimeout(() => {
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000)
+    connectWebSocket(sm)
+  }, reconnectDelay)
+}
+
+function disconnectWebSocket() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (ws) {
+    ws.onopen = null
+    ws.onclose = null
+    ws.onerror = null
+    ws.onmessage = null
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close()
+    }
+    ws = null
+  }
+}
+
+onUnmounted(() => {
+  disconnectWebSocket()
 })
 </script>
 
