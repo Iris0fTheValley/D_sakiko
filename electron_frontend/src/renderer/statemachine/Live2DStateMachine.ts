@@ -334,9 +334,12 @@ export class Live2DStateMachine {
     ) {
       return
     }
-    // 不 await，fire-and-forget（低优先级动作可被后续打断）
-    this.model.motion('idle_motion', 0, 1)
-    this.idleRecoverDeadline = 0
+    // idle_motion 连续循环：播完不重置 deadline，自动再次触发（匹配 Pygame）
+    this.motionInProgress = true
+    this.model.motion('idle_motion', 0, 1).then(() => {
+      this.motionInProgress = false
+      // 不更新 idleRecoverDeadline → 下次检查自动再次触发
+    }).catch(() => { this.motionInProgress = false })
   }
 
   private checkTimedIdle(now: number): void {
@@ -368,7 +371,7 @@ export class Live2DStateMachine {
     this.thinkInterval = THINK_INTERVAL_SUBSEQUENT  // 立即切换为 15s，不等动作播完
     const idx = Math.floor(Math.random() * (this.getMotionSize('text_generating')))
     this.model.motion('text_generating', idx, 3).then(() => {
-      this.idleRecoverDeadline = performance.now() + IDLE_RECOVER_DELAY_MS
+      // 不更新 idleRecoverDeadline（匹配 Pygame: text_generating 的 onFinish 不重置 idle 计时器）
     }).catch((e) => console.warn('[StateMachine] Thinking motion failed:', e))
   }
 
