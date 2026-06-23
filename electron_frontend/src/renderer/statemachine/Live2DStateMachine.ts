@@ -33,6 +33,12 @@ export class Live2DStateMachine {
   // ── 音频状态 ──
   private audioPlaying = false
   private currentAudio: HTMLAudioElement | null = null
+  // 口型同步
+  private mouthSyncFrameCount = 0
+  private mouthOpenValue = 0
+  private lipSyncN = 1.4  // 系数，与 Pygame 一致
+  private audioContext: AudioContext | null = null
+  private analyserNode: AnalyserNode | null = null
 
   // ── Stale Promise 保护 ──
   private currentMotionId = 0
@@ -100,6 +106,10 @@ export class Live2DStateMachine {
   destroy(): void {
     this.ticker.remove(this.tickerCallback)
     this.stopAudio()
+    if (this.audioContext) {
+      try { this.audioContext.close() } catch (_e) { /* ignore */ }
+      this.audioContext = null
+    }
     this.modelLoaded = false
     console.log('[StateMachine] Destroyed')
   }
@@ -126,6 +136,7 @@ export class Live2DStateMachine {
       this.checkLongAudioLoop(now)
     }
     this.updateEyeOpen(now)
+    this.updateMouthSync()
   }
 
   // ── 以下方法在后续任务中实现 ──
@@ -160,6 +171,9 @@ export class Live2DStateMachine {
             this.currentAudio = audioEl
             this.audioPlaying = true
             audioEl.play().catch((e) => console.warn('[StateMachine] Audio play failed:', e))
+
+            // 口型同步：AudioContext → AnalyserNode
+            this.setupLipSyncAnalyser(audioEl, audioId)
 
             audioEl.addEventListener('loadedmetadata', () => {
               if (audioId !== this.currentAudioId) return
@@ -423,5 +437,76 @@ export class Live2DStateMachine {
       this.currentAudio = null
       this.audioPlaying = false
     }
+    // 清理口型同步
+    this.mouthOpenValue = 0
+    if (this.analyserNode) {
+      try { this.analyserNode.disconnect() } catch (_e) { /* ignore */ }
+      this.analyserNode = null
+    }
+  }
+
+  // ── 口型同步（Web Audio API AnalyserNode）──
+
+  /** 为音频元素创建 AnalyserNode 用于口型同步 */
+  private setupLipSyncAnalyser(audioEl: HTMLAudioElement, audioId: number): void {
+    try {
+      if (!this.audioContext) {
+        this.audioContext = new AudioContext()
+      }
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume()
+      }
+      // 断开旧的 analyser
+      if (this.analyserNode) {
+        try { this.analyserNode.disconnect() } catch (_e) { /* ignore */ }
+      }
+      const source = this.audioContext.createMediaElementSource(audioEl)
+      this.analyserNode = this.audioContext.createAnalyser()
+      this.analyserNode.fftSize = 256  // 小 FFT，快速响应
+      source.connect(this.analyserNode)
+      this.analyserNode.connect(this.audioContext.destination)
+      this.mouthSyncFrameCount = 0
+      console.log('[StateMachine] Lip sync analyser set up')
+    } catch (e) {
+      console.warn('[StateMachine] Lip sync setup failed:', e)
+      this.analyserNode = null
+    }
+  }
+
+  /** 每帧更新口型参数（每 3 帧一次，与 Pygame 的 is_update_mouth_sync % 3 == 0 一致） */
+  private updateMouthSync(): void {
+    if (!this.audioPlaying || !this.analyserNode) {
+      // 无音频时衰减口型
+      if (this.mouthOpenValue > 0.005) {
+        this.mouthOpenValue *= 0.85
+        try {
+          // @ts-expect-error internalModel API not fully typed
+          this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', this.mouthOpenValue)
+        } catch (_e) { /* ignore */ }
+      } else if (this.mouthOpenValue > 0) {
+        this.mouthOpenValue = 0
+        try {
+          // @ts-expect-error
+          this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', 0)
+        } catch (_e) { /* ignore */ }
+      }
+      return
+    }
+    this.mouthSyncFrameCount++
+    if (this.mouthSyncFrameCount % 3 !== 0) return
+
+    try {
+      const bufferLength = this.analyserNode.fftSize
+      const dataArray = new Float32Array(bufferLength)
+      this.analyserNode.getFloatTimeDomainData(dataArray)
+      let sum = 0
+      for (let i = 0; i < bufferLength; i++) {
+        sum += dataArray[i] * dataArray[i]
+      }
+      const rms = Math.sqrt(sum / bufferLength)
+      this.mouthOpenValue = Math.min(1.0, rms * this.lipSyncN)
+      // @ts-expect-error internalModel API not fully typed
+      this.model.internalModel.setParameterValue('PARAM_MOUTH_OPEN_Y', this.mouthOpenValue)
+    } catch (_e) { /* ignore */ }
   }
 }
