@@ -515,22 +515,26 @@ export class Live2DStateMachine {
       }
       const rms = Math.sqrt(sum / bufferLength)
       this.mouthOpenValue = Math.min(1.0, rms * this.lipSyncN)
-      if (debug) console.log('[LipSync] RMS:', rms.toFixed(4), 'mouth:', this.mouthOpenValue.toFixed(3))
       this._setMouthParam(this.mouthOpenValue)
     } catch (_e) { /* ignore */ }
   }
 
   /** 通过 coreModel 设置口型参数 */
-  private _mouthSetLogged = false
+  private _mouthVerifyCount = 0
   private _setMouthParam(value: number): void {
-    if (this._mouthParamIndex < 0) {
-      if (!this._mouthSetLogged) { console.log('[StateMachine] _setMouthParam skipped: index=-1'); this._mouthSetLogged = true }
-      return
-    }
+    if (this._mouthParamIndex < 0) return
     try {
-      ;(this.model.internalModel as any)?.coreModel?.setParamFloat(this._mouthParamIndex, value)
+      const cm = (this.model.internalModel as any)?.coreModel
+      if (cm?.setParamFloat) {
+        cm.setParamFloat(this._mouthParamIndex, value)
+        // 每 180 帧（约 3 秒）验证一次写入是否生效
+        if (++this._mouthVerifyCount % 180 === 0 && cm.getParamFloat) {
+          const readback = cm.getParamFloat(this._mouthParamIndex)
+          console.log('[StateMachine] Mouth set:', value.toFixed(3), 'readback:', readback, 'idx:', this._mouthParamIndex)
+        }
+      }
     } catch (e) {
-      if (!this._mouthSetLogged) { console.error('[StateMachine] setParamFloat failed:', e); this._mouthSetLogged = true }
+      console.error('[StateMachine] setParamFloat error:', e)
     }
   }
 }
