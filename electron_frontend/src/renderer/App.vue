@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef, ref, onUnmounted, onMounted, computed } from 'vue'
+import { shallowRef, ref, onUnmounted, computed } from 'vue'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
@@ -78,11 +78,6 @@ function disconnectWebSocket() {
 }
 
 onUnmounted(() => disconnectWebSocket())
-
-onMounted(() => {
-  // 鼠标穿透
-  try { (window as any).electronAPI?.setIgnoreMouseEvents(true, { forward: true }) } catch (_) {}
-})
 </script>
 
 <template>

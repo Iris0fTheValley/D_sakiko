@@ -8,6 +8,7 @@ import ControlButton from './control-button.vue'
 declare const electronAPI: {
   toggleDevTools: () => Promise<boolean>
   toggleAlwaysOnTop: () => Promise<boolean>
+  setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
 }
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -74,6 +75,15 @@ async function toggleAlwaysOnTop() {
     const result = await electronAPI.toggleAlwaysOnTop()
     alwaysOnTop.value = result
   } catch { alwaysOnTop.value = !alwaysOnTop.value }
+}
+
+const mouseThrough = ref(false)
+
+async function toggleMouseThrough() {
+  try {
+    mouseThrough.value = !mouseThrough.value
+    await electronAPI.setIgnoreMouseEvents(mouseThrough.value, { forward: true })
+  } catch { mouseThrough.value = !mouseThrough.value }
 }
 
 const fadeOnHover = ref(false)
@@ -153,6 +163,20 @@ function closeWindow() { window.close() }
                 <div v-else i-solar:pin-linear :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300 opacity-50" />
               </ControlButton>
               <template #tooltip>{{ alwaysOnTop ? '取消置顶' : '窗口置顶' }}</template>
+            </ControlButtonTooltip>
+
+            <ControlButtonTooltip disable-hoverable-content>
+              <ControlButton
+                :button-style="adjustStyleClasses.button"
+                :class="{ 'border-primary-300/70 shadow-[0_10px_24px_rgba(0,0,0,0.22)]': mouseThrough }"
+                @click="toggleMouseThrough()"
+              >
+                <Transition name="fade" mode="out-in">
+                  <div v-if="mouseThrough" i-ph:cursor-click :class="adjustStyleClasses.icon" text="primary-700 dark:primary-300" />
+                  <div v-else i-ph:cursor :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
+                </Transition>
+              </ControlButton>
+              <template #tooltip>{{ mouseThrough ? '禁用鼠标穿透' : '启用鼠标穿透' }}</template>
             </ControlButtonTooltip>
 
             <ControlButtonTooltip disable-hoverable-content>
