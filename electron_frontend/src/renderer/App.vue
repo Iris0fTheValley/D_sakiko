@@ -141,21 +141,8 @@ onUnmounted(() => disconnectWebSocket())
     <ResizeHandler />
     <ControlsIsland />
 
-    <!-- 窗口边框高亮（airi border highlight）-->
-    <Transition
-      enter-active-class="transition-opacity duration-250 ease-in-out"
-      enter-from-class="opacity-50"
-      enter-to-class="opacity-100"
-      leave-active-class="transition-opacity duration-250 ease-in-out"
-      leave-from-class="opacity-100"
-      leave-to-class="opacity-50"
-    >
-      <div v-if="nearBorder" class="pointer-events-none fixed inset-0 z-999">
-        <div class="h-full w-full border-8 border-red-500 rounded-2xl" />
-      </div>
-      <!-- DEBUG: always show to test CSS -->
-      <div class="pointer-events-none fixed inset-0 z-999" style="border: 4px solid lime; border-radius: 1rem;"></div>
-    </Transition>
+    <!-- DEBUG: test CSS rendering -->
+    <div class="pointer-events-none fixed inset-0 z-999"><div class="h-full w-full border-4 border-lime-400 rounded-2xl"></div></div>
   </div>
 </template>
 
