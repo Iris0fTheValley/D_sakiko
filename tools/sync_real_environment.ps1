@@ -2,6 +2,7 @@
 param(
     [string]$TargetRoot = 'J:\AI friend\sairi\DSakiko3.10',
     [switch]$WhatIf,
+    [switch]$InstallRuntimeCompatibilityDependencies,
     [switch]$InstallElectronDependencies,
     [switch]$BuildElectron
 )
@@ -82,6 +83,16 @@ Write-Host "Source:  $repoRoot"
 Write-Host "Target:  $targetPath"
 Write-Host "Baseline: current branch (already based on latest upstream/master)"
 
+$runtimePython = Join-Path $targetPath 'runtime\python.exe'
+$runtimePythonVersion = $null
+if (Test-Path -LiteralPath $runtimePython -PathType Leaf) {
+    $runtimePythonVersion = (& $runtimePython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+    Write-Host "Runtime:  Python $runtimePythonVersion"
+    if ([version]$runtimePythonVersion -lt [version]'3.11') {
+        Write-Warning 'The current upstream project officially requires Python 3.11; the packaged runtime is older and uses compatibility paths.'
+    }
+}
+
 # This is intentionally additive. It updates source files from the current branch
 # without deleting packaged models, runtime libraries, user data, or local settings.
 Sync-Directory `
@@ -122,6 +133,22 @@ if (-not $WhatIf) {
         Write-Host ("{0}: {1}" -f $status, $relativePath)
         if ($status -eq 'MISMATCH') {
             throw "Sync verification failed; hash mismatch: $relativePath"
+        }
+    }
+}
+
+if ($InstallRuntimeCompatibilityDependencies) {
+    if (-not $runtimePythonVersion) {
+        throw "Bundled runtime Python was not found: $runtimePython"
+    }
+
+    if ($WhatIf) {
+        Write-Host "[WhatIf] install runtime compatibility dependencies with $runtimePython"
+    } else {
+        $colorVersion = if ([version]$runtimePythonVersion -lt [version]'3.10') { 'coloraide==8.6' } else { 'coloraide>=8.11.1,<9' }
+        & $runtimePython -m pip install $colorVersion
+        if ($LASTEXITCODE -ne 0) {
+            throw "Runtime dependency installation failed ($LASTEXITCODE): $colorVersion"
         }
     }
 }

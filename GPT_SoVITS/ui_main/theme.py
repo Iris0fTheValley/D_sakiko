@@ -33,7 +33,9 @@ _DARK_ON_ACCENT_CHARACTER_SEEDS = frozenset({
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
+# The packaged Windows runtime is still Python 3.9, where dataclass slots are
+# unavailable.  Frozen semantics are retained; slots are only an optimization.
+@dataclass(frozen=True)
 class ThemePalette:
     """保存由角色原色衍生出的浅色界面语义色。"""
 

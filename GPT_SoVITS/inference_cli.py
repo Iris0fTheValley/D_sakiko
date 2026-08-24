@@ -4,12 +4,16 @@ import contextlib
 import os
 import queue
 import signal
+import sys
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast, Optional
 
-os.chdir(os.path.dirname(__file__))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(script_dir)
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
 from character import CharacterAttributes
 from log import get_logger, setup_worker_logging
@@ -819,11 +823,25 @@ def build_audio_progress_message(
 
 def synthesize(to_gptsovits_queue, from_gptsovits_queue, from_gptsovits_queue2, log_queue=None) -> None:
     """作为独立 worker 进程处理 GPT-SoVITS 语音生成命令。"""
+    # Windows multiprocessing uses spawn; make local package imports explicit
+    # in the worker instead of relying on the parent's sys.path.
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     if log_queue is not None:
         setup_worker_logging(log_queue)
 
-    from tools.i18n.i18n import I18nAuto
+    try:
+        from tools.i18n.i18n import I18nAuto
+    except ModuleNotFoundError as error:
+        # Some bundled Python 3.9 builds omit the application directory from
+        # the spawned worker's package path.  Reuse the same module directly.
+        if error.name not in {"tools", "tools.i18n"}:
+            raise
+        tools_dir = os.path.join(script_dir, "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
+        from i18n.i18n import I18nAuto
     import soundfile as sf
 
     i18n_translator = I18nAuto()
