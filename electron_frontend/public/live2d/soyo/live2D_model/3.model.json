@@ -1,0 +1,306 @@
+{
+    "version": "3.1",
+    "type": 0,
+    "bounds": {
+        "width": 11.198822,
+        "height": 22.4484119,
+        "center_x": 0.0121831894,
+        "center_y": -3.85074234
+    },
+    "model": "soyo_casual-2023.moc",
+    "textures": [
+        "texture_00.png",
+        "texture_01.png"
+    ],
+    "motions": {
+        "happiness": [
+            {
+                "name": "happiness_00",
+                "file": "kime01.mtn"
+            },
+            {
+                "name": "happiness_01",
+                "file": "smile05.mtn"
+            },
+            {
+                "name": "happiness_02",
+                "file": "smile01.mtn"
+            },
+            {
+                "name": "happiness_03",
+                "file": "nnf05.mtn"
+            },
+            {
+                "name": "happiness_04",
+                "file": "smile02.mtn"
+            },
+            {
+                "name": "happiness_05",
+                "file": "smile04.mtn"
+            }
+        ],
+        "sadness": [
+            {
+                "name": "sadness_06",
+                "file": "cry01.mtn"
+            },
+            {
+                "name": "sadness_07",
+                "file": "sad01.mtn"
+            },
+            {
+                "name": "sadness_08",
+                "file": "sad02.mtn"
+            },
+            {
+                "name": "sadness_09",
+                "file": "serious02.mtn"
+            },
+            {
+                "name": "sadness_10",
+                "file": "serious02.mtn"
+            },
+            {
+                "name": "sadness_11",
+                "file": "sad02.mtn"
+            }
+        ],
+        "anger": [
+            {
+                "name": "anger_12",
+                "file": "angry01.mtn"
+            },
+            {
+                "name": "anger_13",
+                "file": "angry02.mtn"
+            },
+            {
+                "name": "anger_14",
+                "file": "kandou01.mtn"
+            },
+            {
+                "name": "anger_15",
+                "file": "angry04.mtn"
+            },
+            {
+                "name": "anger_16",
+                "file": "angry05.mtn"
+            },
+            {
+                "name": "anger_17",
+                "file": "angry06.mtn"
+            }
+        ],
+        "disgust": [
+            {
+                "name": "disgust_18",
+                "file": "angry06.mtn"
+            },
+            {
+                "name": "disgust_19",
+                "file": "angry01.mtn"
+            },
+            {
+                "name": "disgust_20",
+                "file": "serious03.mtn"
+            },
+            {
+                "name": "disgust_21",
+                "file": "angry01.mtn"
+            },
+            {
+                "name": "disgust_22",
+                "file": "odoodo01.mtn"
+            },
+            {
+                "name": "disgust_23",
+                "file": "shame02.mtn"
+            }
+        ],
+        "like": [
+            {
+                "name": "like_24",
+                "file": "smile02.mtn"
+            },
+            {
+                "name": "like_25",
+                "file": "kime01.mtn"
+            },
+            {
+                "name": "like_26",
+                "file": "smile04.mtn"
+            },
+            {
+                "name": "like_27",
+                "file": "nnf02.mtn"
+            },
+            {
+                "name": "like_28",
+                "file": "ando01.mtn"
+            },
+            {
+                "name": "like_29",
+                "file": "smile03.mtn"
+            }
+        ],
+        "surprise": [
+            {
+                "name": "surprise_30",
+                "file": "scared01.mtn"
+            },
+            {
+                "name": "surprise_31",
+                "file": "sad03.mtn"
+            },
+            {
+                "name": "surprise_32",
+                "file": "surprised01.mtn"
+            },
+            {
+                "name": "surprise_33",
+                "file": "scared01.mtn"
+            },
+            {
+                "name": "surprise_34",
+                "file": "sad03.mtn"
+            },
+            {
+                "name": "surprise_35",
+                "file": "surprised01.mtn"
+            }
+        ],
+        "fear": [
+            {
+                "name": "fear_36",
+                "file": "sad03.mtn"
+            },
+            {
+                "name": "fear_37",
+                "file": "scared01.mtn"
+            },
+            {
+                "name": "fear_38",
+                "file": "sad03.mtn"
+            },
+            {
+                "name": "fear_39",
+                "file": "scared01.mtn"
+            },
+            {
+                "name": "fear_40",
+                "file": "sad03.mtn"
+            },
+            {
+                "name": "fear_41",
+                "file": "scared01.mtn"
+            }
+        ],
+        "IDLE": [
+            {
+                "name": "IDLE_42",
+                "file": "smile01.mtn"
+            },
+            {
+                "name": "IDLE_43",
+                "file": "cry01.mtn"
+            },
+            {
+                "name": "IDLE_44",
+                "file": "nf_left01.mtn"
+            },
+            {
+                "name": "IDLE_45",
+                "file": "nf_right01.mtn"
+            },
+            {
+                "name": "IDLE_46",
+                "file": "kandou01.mtn"
+            },
+            {
+                "name": "IDLE_47",
+                "file": "nnf05.mtn"
+            },
+            {
+                "name": "IDLE_48",
+                "file": "serious01.mtn"
+            },
+            {
+                "name": "IDLE_49",
+                "file": "serious04.mtn"
+            },
+            {
+                "name": "IDLE_50",
+                "file": "sad01.mtn"
+            }
+        ],
+        "text_generating": [
+            {
+                "name": "text_generating_51",
+                "file": "thinking01.mtn"
+            },
+            {
+                "name": "text_generating_52",
+                "file": "thinking02.mtn"
+            },
+            {
+                "name": "text_generating_53",
+                "file": "thinking01.mtn"
+            }
+        ],
+        "bye": [
+            {
+                "name": "bye_54",
+                "file": "bye01.mtn"
+            },
+            {
+                "name": "bye_55",
+                "file": "bye02.mtn"
+            }
+        ],
+        "change_character": [
+            {
+                "name": "change_character_56",
+                "file": "bye01.mtn"
+            },
+            {
+                "name": "change_character_57",
+                "file": "smile02.mtn"
+            },
+            {
+                "name": "change_character_58",
+                "file": "thinking01.mtn"
+            }
+        ],
+        "idle_motion": [
+            {
+                "name": "idle_motion_59",
+                "file": "idle01.mtn"
+            }
+        ],
+        "talking_motion": [
+            {
+                "name": "talking_motion_60",
+                "file": "nnf02.mtn"
+            }
+        ]
+    },
+    "expressions": [
+        {
+            "name": "serious",
+            "file": "serious01.exp.json"
+        },
+        {
+            "name": "idle",
+            "file": "idle01.exp.json"
+        }
+    ],
+    "physics": "soyo_casual-2023.physics.json",
+    "physics_v2": {
+        "file": "soyo_casual-2023.physics.json"
+    },
+    "options": {
+        "aniso_level": 9,
+        "tex_type": 0,
+        "shader_type": 0
+    }
+}

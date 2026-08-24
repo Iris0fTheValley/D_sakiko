@@ -5,6 +5,7 @@ import os,sys
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 sys.path.insert(0, script_dir)
+sys.path.insert(0, project_root)
 from ui_main.threads.update_config_thread import UpdateConfigThread
 
 from queue import Queue, Empty
@@ -20,7 +21,6 @@ from PyQt5.QtGui import QFont, QFontDatabase
 import character
 import dp_local2
 import audio_generator
-import live2d_module
 import qtUI
 from chat.chat import get_chat_manager
 
@@ -35,6 +35,102 @@ faulthandler.enable(file=open("faulthandler_log.txt", "a"), all_threads=True)
 main_logger = get_logger(__name__)
 
 NO_AUDIO_TEXT_EVENT_PREFIX = "__NO_AUDIO_TEXT__:"
+ELECTRON_RENDERER = os.environ.get("DSAKIKO_RENDERER", "electron").strip().lower() == "electron"
+
+# Electron mode owns a formal bridge/controller pair.  These globals are
+# initialized in __main__ and intentionally stay absent in legacy mode.
+electron_controller = None
+electron_bridge = None
+electron_renderer_messages = None
+electron_renderer_ready = threading.Event()
+electron_segment_events: dict[str, threading.Event] = {}
+electron_segment_events_lock = threading.Lock()
+
+
+def electron_emit(command: dict[str, object]) -> None:
+    """Queue one controller command for Bridge; never choose or rewrite motion."""
+    if electron_bridge is None:
+        return
+    command_type = str(command.get("type") or "")
+    data = command.get("data") if isinstance(command.get("data"), dict) else {}
+    if command_type == "segment_completed":
+        segment_id = str(data.get("segment_id") or "")
+        with electron_segment_events_lock:
+            waiter = electron_segment_events.get(segment_id)
+        if waiter is not None:
+            waiter.set()
+    electron_bridge.event_queue.put(command)
+
+
+def electron_audio_url(audio_path: str) -> str:
+    """Convert a generated-audio path into the bridge's constrained URL space."""
+    absolute = os.path.abspath(os.path.join(script_dir, audio_path))
+    relative = os.path.relpath(absolute, project_root).replace(os.sep, "/")
+    return "http://127.0.0.1:9877/audio/" + relative
+
+
+def electron_renderer_loop() -> None:
+    """Feed renderer lifecycle facts into the one shared controller and tick it."""
+    global electron_controller
+    next_tick = time.monotonic()
+    while electron_controller is not None:
+        now = time.monotonic()
+        if now >= next_tick:
+            electron_controller.tick()
+            next_tick = now + 0.05
+        try:
+            ui_command = change_char_queue.get_nowait()
+        except Exception:
+            ui_command = None
+        if isinstance(ui_command, dict):
+            command_type = str(ui_command.get("type") or "")
+            if command_type == "cancel_turn":
+                electron_controller.reset()
+            elif command_type == "switch_live2d":
+                model_json = str(ui_command.get("model_json") or "")
+                model_path = os.path.abspath(os.path.join(script_dir, model_json))
+                model_relative = os.path.relpath(model_path, project_root).replace(os.sep, "/")
+                if model_relative.startswith("live2d_related/"):
+                    model_relative = model_relative[len("live2d_related/"):]
+                model_url = "http://127.0.0.1:9877/model/" + model_relative
+                if not os.path.isfile(model_path):
+                    model_url = str(ui_command.get("model_url") or model_url)
+                electron_controller.switch_model({
+                    "model_url": model_url,
+                    "character_folder": str(ui_command.get("character_folder_name") or ""),
+                    "character_name": str(ui_command.get("character_name") or ""),
+                })
+        try:
+            message = electron_renderer_messages.get(timeout=0.05)
+        except Exception:
+            continue
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("type") or "") == "renderer_hello":
+            data = message.get("data") if isinstance(message.get("data"), dict) else {}
+            electron_controller.handle_renderer_event({
+                "type": "renderer_ready",
+                "event_id": message.get("event_id"),
+                "session_id": electron_controller.snapshot().get("session_id"),
+                "source": message.get("source", "electron-renderer"),
+                "data": {
+                    **data,
+                    "renderer_id": data.get("renderer_id") or "electron-main",
+                    "motion_groups": data.get("motion_groups", {}),
+                },
+            })
+            continue
+        # Renderer sessions are transport sessions; controller session is the
+        # authoritative behavior epoch and is attached at the process boundary.
+        message["session_id"] = electron_controller.snapshot().get("session_id", "")
+        if str(message.get("type") or "") == "renderer_intent":
+            data = message.get("data") if isinstance(message.get("data"), dict) else {}
+            if data.get("intent") == "click":
+                electron_controller.click_motion(event_id=str(message.get("event_id") or ""))
+            continue
+        electron_controller.handle_renderer_event(message)
+        if str(message.get("type") or "") == "renderer_ready":
+            electron_renderer_ready.set()
 
 
 def get_character_by_name(character_name: str) -> character.CharacterAttributes | None:
@@ -135,6 +231,94 @@ def update_segment_audio_path(payload: dict[str, object], segment_raw: dict[str,
         msg.translation = str(segment_raw.get("translation") or msg.translation)
 
 
+def _audio_duration_seconds(audio_path: str) -> float:
+    try:
+        import wave
+        with wave.open(audio_path, "rb") as wav_file:
+            rate = wav_file.getframerate()
+            return wav_file.getnframes() / rate if rate else 0.0
+    except Exception:
+        return 0.0
+
+
+def handle_electron_model_response_payload(payload: dict[str, object]) -> None:
+    """Generate one ordered turn for the shared controller in Electron mode."""
+    if not electron_renderer_ready.wait(timeout=60):
+        main_logger.error("Electron renderer 在 60 秒内未完成握手，跳过 Live2D 片段")
+        is_audio_play_complete.put("yes")
+        return
+    character_name = str(payload.get("character_name") or "")
+    current_character = get_character_by_name(character_name)
+    segments_raw = payload.get("segments")
+    turn_id = str(payload.get("turn_id") or "")
+    if current_character is None or not isinstance(segments_raw, list):
+        is_audio_play_complete.put("yes")
+        return
+
+    dp2qt_queue.put(build_assistant_turn_phase_event(payload, "tts"))
+    turn_status = "ok"
+    for index, segment_raw in enumerate(segments_raw):
+        if not isinstance(segment_raw, dict) or is_payload_turn_cancelled(payload):
+            turn_status = "cancelled"
+            mark_segments_no_audio(payload, segments_raw, index)
+            break
+        text = str(segment_raw.get("text") or "")
+        emotion_label = str(segment_raw.get("emotion") or "LABEL_0")
+        force_no_audio = bool(segment_raw.get("force_no_audio", False)) or not dp_chat.if_generate_audio
+        audio_path = ""
+        if not force_no_audio:
+            try:
+                audio_path = audio_gen.generate_audio_for_character_sync(
+                    clean_text_for_audio(text),
+                    current_character,
+                    bool(payload.get("sakiko_state", dp_chat.sakiko_state)),
+                    str(payload.get("audio_language_choice") or dp_chat.audio_language_choice),
+                    segment_index=index + 1,
+                    segment_total=len(segments_raw),
+                    emotion=emotion_label,
+                )
+            except Exception:
+                main_logger.exception("Electron 模式语音合成失败，使用无语音片段")
+                audio_path = ""
+
+        if index == 0:
+            dp_chat._clear_text_generating_flag_if_needed(is_text_generating_queue)
+            electron_controller.stop_thinking(turn_id)
+
+        segment_id = str(segment_raw.get("message_index", index))
+        waiter = threading.Event()
+        with electron_segment_events_lock:
+            electron_segment_events[segment_id] = waiter
+        try:
+            electron_controller.start_emotion_segment(
+                turn_id=turn_id,
+                segment_id=segment_id,
+                emotion=emotion_label,
+                audio_url=electron_audio_url(audio_path) if audio_path else "",
+                audio_duration=_audio_duration_seconds(audio_path) if audio_path else 0.0,
+                text=text,
+            )
+            while not waiter.wait(0.25):
+                if is_payload_turn_cancelled(payload):
+                    turn_status = "cancelled"
+                    electron_controller.reset()
+                    mark_segments_no_audio(payload, segments_raw, index)
+                    break
+            if turn_status == "cancelled":
+                break
+        finally:
+            with electron_segment_events_lock:
+                electron_segment_events.pop(segment_id, None)
+        translation = str(segment_raw.get("translation") or "")
+        dp2qt_queue.put(build_assistant_segment_event(payload, segment_raw, audio_path or "NO_AUDIO"))
+
+    is_audio_play_complete.put("yes")
+    if turn_status in {"cancelled", "error"}:
+        clear_text_generating_flag_if_needed()
+    if bool(payload.get("turn_complete", True)):
+        dp2qt_queue.put(build_assistant_turn_complete_event(payload, turn_status))
+
+
 def clear_text_generating_flag_if_needed() -> None:
     """取消或异常收尾时，确保 Live2D 不会一直停留在思考状态。"""
     try:
@@ -147,6 +331,9 @@ def clear_text_generating_flag_if_needed() -> None:
 
 def handle_model_response_payload(payload: dict[str, object]) -> None:
     """处理结构化模型回复事件，逐段合成语音并通知 UI。"""
+    if ELECTRON_RENDERER and electron_controller is not None:
+        handle_electron_model_response_payload(payload)
+        return
     character_name = str(payload.get("character_name") or "")
     current_character = get_character_by_name(character_name)
     segments_raw = payload.get("segments")
@@ -371,13 +558,16 @@ def main_thread():
                     this_turn_response = "bye"
 
             if this_turn_response=='bye':
-                emotion_queue.put('bye')    #退出live2D进程
+                if ELECTRON_RENDERER and electron_controller is not None:
+                    electron_controller.bye()
+                else:
+                    emotion_queue.put('bye')    #退出 legacy Live2D 进程
                 dp2qt_queue.put("（再见）")
                 audio_gen.shutdown_worker()
 
-                # tr1 是 live2d 进程变量，我们等待 live2d 进程结束，再向 Qt 窗口发送退出信息。
-                global tr1
-                tr1.join()
+                # legacy Pygame 进程需要等待；Electron renderer 由 bridge 命令关闭。
+                if tr1 is not None:
+                    tr1.join()
 
                 QT_message_queue.put('bye')
                 break
@@ -505,6 +695,25 @@ if __name__=='__main__':
     is_display_text_value=multiprocessing.Value('b', True)  # 是否显示文本
     motion_complete_value=multiprocessing.Value('b', True)  # 动作是否完成
 
+    if ELECTRON_RENDERER:
+        from live2d_controller import Live2DBehaviorController
+        from bridge.saki_bridge import Bridge
+
+        electron_event_queue = Queue()
+        electron_renderer_messages = Queue()
+        electron_controller = Live2DBehaviorController(
+            electron_emit,
+            motion_catalog={
+                "happiness": 6, "sadness": 4, "anger": 7, "disgust": 2,
+                "like": 4, "surprise": 4, "fear": 2, "IDLE": 9,
+                "text_generating": 4, "bye": 2, "change_character": 3,
+                "idle_motion": 1, "talking_motion": 1,
+            },
+        )
+        electron_bridge = Bridge(electron_event_queue, electron_renderer_messages, project_root)
+        electron_bridge.start()
+        threading.Thread(target=electron_renderer_loop, name="live2d-behavior", daemon=True).start()
+
     dp_chat=dp_local2.DSLocalAndVoiceGen(characters, chat_manager)
 
     audio_gen=audio_generator.AudioGenerate(log_queue=get_log_queue())
@@ -559,12 +768,13 @@ if __name__=='__main__':
     screen_w_mid = int(0.5 * desktop_w)
     screen_h_mid = int(0.5 * desktop_h)
 
-    # 不传递 characters 给子进程，在子进程中重新创建，避免 Windows 下 pickle 序列化截断问题
-    # live2d 模块（该模块为不同进程）
-    # 在 MacOS 下，所有的 NSWindow（Qt 窗口）只能在独立进程中创建，不可以在子线程中创建窗口。
-    # 由于 live2d 模块会创建一个窗口，我们必须使用多进程而非多线程实现并行。
-    main_logger.info("加载Live2D界面中...")
-    tr1=multiprocessing.Process(target=live2d_module.run_live2d_process,args=(emotion_queue,audio_file_path_queue,is_text_generating_queue,char_is_converted_queue,change_char_queue,live2d_text_queue,is_display_text_value,motion_complete_value, desktop_w, desktop_h, get_log_queue()))
+    tr1 = None
+    if not ELECTRON_RENDERER:
+        # Legacy fallback only: importing/starting Pygame is opt-in via
+        # DSAKIKO_RENDERER=pygame and never happens in Electron mode.
+        import live2d_module
+        main_logger.info("加载 legacy Pygame Live2D 界面中...")
+        tr1=multiprocessing.Process(target=live2d_module.run_live2d_process,args=(emotion_queue,audio_file_path_queue,is_text_generating_queue,char_is_converted_queue,change_char_queue,live2d_text_queue,is_display_text_value,motion_complete_value, desktop_w, desktop_h, get_log_queue()))
     # LLM 生成模块（该模块为不同线程）
     tr2=threading.Thread(target=dp_chat.text_generator,args=(text_queue,
                                                              is_audio_play_complete,
@@ -580,7 +790,8 @@ if __name__=='__main__':
     # 更新配置的线程
     tr4 = UpdateConfigThread("d_sakiko_config")
     tr4.reload_requested.connect(d_sakiko_config.reload_from_disk)
-    tr1.start()
+    if tr1 is not None:
+        tr1.start()
     tr2.start()
     tr3.start()
     tr4.start()
@@ -619,9 +830,9 @@ if __name__=='__main__':
     except Exception:
         pass
     try:
-        # live2d 播放进程
-        change_char_queue.put('exit')
-        emotion_queue.put('bye')
+        if tr1 is not None:
+            change_char_queue.put('exit')
+            emotion_queue.put('bye')
     except Exception:
         pass
     try:
@@ -636,13 +847,18 @@ if __name__=='__main__':
         pass
 
     # 理论上讲 main_thread 函数中已经调用过 tr1.join，等待过 live2d 进程结束；这里再调用一次不是必要的，但也没有副作用。
-    tr1.join(timeout=3)
-    if tr1.is_alive():
+    if tr1 is not None:
+        tr1.join(timeout=3)
+    if tr1 is not None and tr1.is_alive():
         try:
             tr1.terminate()
             tr1.join(timeout=3)
         except Exception:
             pass
+    if ELECTRON_RENDERER and electron_controller is not None:
+        electron_controller.close()
+        if electron_bridge is not None:
+            electron_bridge.shutdown()
     tr2.join()
     tr3.join()
     tr4.quit()
