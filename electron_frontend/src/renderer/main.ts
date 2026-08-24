@@ -26,8 +26,11 @@ if (theme === 'dark') {
 
 async function bootstrap() {
   try {
-    await loadScript('/sdk/live2d.min.js')
-    await loadScript('/sdk/Live2DFramework.js')
+    // Production Electron loads the renderer with file://.  Keep this
+    // relative so the packaged dist/renderer/sdk files are found; an
+    // absolute /sdk path resolves to the drive root under file://.
+    await loadScript('./sdk/live2d.min.js')
+    await loadScript('./sdk/Live2DFramework.js')
     console.log('[SDK] Cubism 2 SDK loaded')
   } catch (e) {
     console.warn('[SDK] Cubism 2 SDK not found:', e)
