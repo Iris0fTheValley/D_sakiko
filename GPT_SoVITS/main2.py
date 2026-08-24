@@ -4,8 +4,14 @@ import os,sys
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
-sys.path.insert(0, script_dir)
+# Keep the GPT-SoVITS package directory ahead of the repository root.  Both
+# directories contain a ``tools`` package; the former is the runtime package
+# used by TTS_infer_pack, while the latter contains launcher utilities.
+for _path in (script_dir, project_root):
+    if _path in sys.path:
+        sys.path.remove(_path)
 sys.path.insert(0, project_root)
+sys.path.insert(0, script_dir)
 from ui_main.threads.update_config_thread import UpdateConfigThread
 
 from queue import Queue, Empty

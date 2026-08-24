@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, cast, Optional
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
+if script_dir in sys.path:
+    sys.path.remove(script_dir)
+sys.path.insert(0, script_dir)
 
 from character import CharacterAttributes
 from log import get_logger, setup_worker_logging
@@ -825,8 +826,9 @@ def synthesize(to_gptsovits_queue, from_gptsovits_queue, from_gptsovits_queue2, 
     """作为独立 worker 进程处理 GPT-SoVITS 语音生成命令。"""
     # Windows multiprocessing uses spawn; make local package imports explicit
     # in the worker instead of relying on the parent's sys.path.
-    if script_dir not in sys.path:
-        sys.path.insert(0, script_dir)
+    if script_dir in sys.path:
+        sys.path.remove(script_dir)
+    sys.path.insert(0, script_dir)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     if log_queue is not None:
         setup_worker_logging(log_queue)
