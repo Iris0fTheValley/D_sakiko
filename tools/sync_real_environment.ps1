@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$TargetRoot = 'J:\AI friend\DSakiko3.10',
+    [string]$TargetRoot = 'J:\AI friend\sairi\DSakiko3.10',
     [switch]$WhatIf,
     [switch]$InstallElectronDependencies,
     [switch]$BuildElectron
