@@ -186,6 +186,15 @@ class DSakikoConfig(QConfig):
         validator=OptionsValidator(["screen", "face_to_face"]),
     )
 
+    # Live2D 渲染后端：Electron 为默认模式，Pygame 保留为兼容/调试模式。
+    live2d_renderer = OptionsConfigItem(
+        "ui_state",
+        "live2d_renderer",
+        "electron",
+        validator=OptionsValidator(["electron", "pygame"]),
+        restart=True,
+    )
+
     # 颜色主题默认信息
     theme_color = ConfigItem("theme_color_setting", "theme_color", [
         {

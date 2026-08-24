@@ -35,7 +35,18 @@ faulthandler.enable(file=open("faulthandler_log.txt", "a"), all_threads=True)
 main_logger = get_logger(__name__)
 
 NO_AUDIO_TEXT_EVENT_PREFIX = "__NO_AUDIO_TEXT__:"
-ELECTRON_RENDERER = os.environ.get("DSAKIKO_RENDERER", "electron").strip().lower() == "electron"
+
+
+def resolve_renderer_mode(configured_mode: str = "electron") -> str:
+    """Resolve the renderer once, allowing an explicit environment override."""
+    requested = os.environ.get("DSAKIKO_RENDERER", "").strip().lower()
+    if requested in {"electron", "pygame"}:
+        return requested
+    configured = str(configured_mode or "electron").strip().lower()
+    return configured if configured in {"electron", "pygame"} else "electron"
+
+
+ELECTRON_RENDERER = resolve_renderer_mode() == "electron"
 
 # Electron mode owns a formal bridge/controller pair.  These globals are
 # initialized in __main__ and intentionally stay absent in legacy mode.
@@ -671,7 +682,11 @@ if __name__=='__main__':
 
     from qconfig import d_sakiko_config
 
+    renderer_mode = resolve_renderer_mode(d_sakiko_config.live2d_renderer.value)
+    ELECTRON_RENDERER = renderer_mode == "electron"
+
     main_logger.info("数字小祥程序...")
+    main_logger.info("Live2D 渲染模式：%s", renderer_mode)
     get_all=character.GetCharacterAttributes()
     characters=get_all.character_class_list
 

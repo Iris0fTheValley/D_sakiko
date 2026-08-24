@@ -83,6 +83,8 @@ Write-Host "Source:  $repoRoot"
 Write-Host "Target:  $targetPath"
 Write-Host "Baseline: current branch (already based on latest upstream/master)"
 
+$startupConfigName = (-join @([char]0x542F, [char]0x52A8, [char]0x53C2, [char]0x6570, [char]0x914D, [char]0x7F6E)) + '.bat'
+
 $runtimePython = Join-Path $targetPath 'runtime\python.exe'
 $runtimePythonVersion = $null
 if (Test-Path -LiteralPath $runtimePython -PathType Leaf) {
@@ -95,6 +97,22 @@ if (Test-Path -LiteralPath $runtimePython -PathType Leaf) {
 
 # This is intentionally additive. It updates source files from the current branch
 # without deleting packaged models, runtime libraries, user data, or local settings.
+Sync-File `
+    -Source (Join-Path $repoRoot 'run.bat') `
+    -Destination (Join-Path $targetPath 'run.bat')
+
+Sync-File `
+    -Source (Join-Path $repoRoot 'startup_config.bat') `
+    -Destination (Join-Path $targetPath 'startup_config.bat')
+
+Sync-File `
+    -Source (Join-Path $repoRoot 'startup_config.bat') `
+    -Destination (Join-Path $targetPath $startupConfigName)
+
+Sync-File `
+    -Source (Join-Path $repoRoot 'tools\launch_runtime.py') `
+    -Destination (Join-Path $targetPath 'tools\launch_runtime.py')
+
 Sync-Directory `
     -Source (Join-Path $repoRoot 'GPT_SoVITS') `
     -Destination (Join-Path $targetPath 'GPT_SoVITS')
@@ -110,8 +128,13 @@ Sync-Directory `
 
 if (-not $WhatIf) {
     $checks = @(
+        'run.bat',
+        'startup_config.bat',
+        'tools\launch_runtime.py',
         'GPT_SoVITS\main2.py',
         'GPT_SoVITS\live2d_controller.py',
+        'GPT_SoVITS\qconfig.py',
+        'GPT_SoVITS\ui\components\custom_setting_area.py',
         'bridge\protocol.py',
         'bridge\saki_bridge.py',
         'electron_frontend\package.json',
