@@ -2,6 +2,8 @@ from __future__ import annotations
 import os, sys, unittest
 from random import Random
 from queue import Queue
+from threading import Event, Thread
+import time
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..")); sys.path.insert(0, root) if root not in sys.path else None
 from live2d_support.renderer_host import SharedRendererHost
 from live2d_support.renderer_host import SharedRendererService
@@ -30,5 +32,10 @@ class RendererHostTest(unittest.TestCase):
         motion = commands.get_nowait(); self.assertEqual(motion["type"], "play_motion")
         facts.put({"type":"motion_started","data":{"token":motion["data"]["token"]}})
         self.assertEqual(service.run_once(), 1); self.assertEqual(commands.get_nowait()["type"], "play_audio")
+    def test_service_worker_stops_under_caller_lifecycle_control(self):
+        service = SharedRendererService(Queue(), Queue(), Queue()); stop = Event()
+        worker = Thread(target=service.run, args=(stop,), daemon=True); worker.start()
+        time.sleep(0.03); stop.set(); worker.join(0.5)
+        self.assertFalse(worker.is_alive())
 
 if __name__ == '__main__': unittest.main()

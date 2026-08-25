@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from queue import Empty
+import time
 from typing import Any
 
 from live2d_support.renderer_contract import audio_command, motion_command, normalize_renderer_fact
@@ -97,3 +98,9 @@ class SharedRendererService:
                 emotion=str(data.get("emotion", "")), audio_path=str(data.get("audio_path", "")),
             ))
         return handled
+
+    def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
+        """Run until the caller's lifecycle owner requests a clean stop."""
+        while not stop_event.is_set():
+            if self.run_once() == 0:
+                time.sleep(poll_interval_seconds)
