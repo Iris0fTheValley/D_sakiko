@@ -10,6 +10,7 @@ from typing import Any
 from live2d_support.renderer_contract import audio_command, motion_command, normalize_renderer_fact
 from live2d_support.shared_behavior import ExactMotion, PlaySegment, SharedLive2DBehavior, StartAudio
 from live2d_support.behavior_scheduler import ScheduledMotion, SharedBehaviorScheduler
+from live2d_support.sakiko_conversion import SakikoConversionDecision, SharedSakikoConversion
 
 
 CommandEmitter = Callable[[dict[str, Any]], None]
@@ -25,6 +26,8 @@ class SharedRendererHost:
         self._bye_token = ""
         self._scheduled_tokens: dict[str, str] = {}
         self._renderer_is_sakiko = False
+        self._sakiko_conversion = SharedSakikoConversion()
+        self._pending_conversion: SakikoConversionDecision | None = None
 
     def start_bye(self) -> bool:
         command = self._behavior.start_named_motion(turn_id="", segment_id="", group="bye", priority=3)
@@ -74,6 +77,9 @@ class SharedRendererHost:
                 self._behavior.set_capabilities(data.get("motion_groups", {}))
                 self._scheduler.set_catalog(data.get("motion_groups", {}))
             self._renderer_is_sakiko = str(data.get("renderer_id", "")).lower() == "sakiko"
+            if self._pending_conversion is not None:
+                pending, self._pending_conversion = self._pending_conversion, None
+                self._emit_conversion_motion(pending)
             return True
         if message.get("type") == "renderer_intent" and data.get("intent") == "click":
             command = self._scheduler.click(is_sakiko=self._renderer_is_sakiko)
@@ -128,6 +134,28 @@ class SharedRendererHost:
             return True
         return False
 
+    def start_sakiko_conversion(self, conversion, model_urls: Mapping[str, str]) -> bool:
+        """Decide once; the renderer only reloads the requested model."""
+        decision = self._sakiko_conversion.decide(conversion)
+        if decision.model_target == "current":
+            return self._emit_conversion_motion(decision)
+        model_url = str(model_urls.get(decision.model_target, ""))
+        if not model_url:
+            return False
+        self._pending_conversion = decision
+        self._emit({"type": "switch_live2d", "data": {"model_url": model_url, "character_folder": "sakiko"}})
+        return True
+
+    def _emit_conversion_motion(self, decision: SakikoConversionDecision) -> bool:
+        expression = self._scheduler.resolve_semantic_expression(decision.semantic_expression) if decision.semantic_expression else None
+        if decision.fixed_index is None:
+            command = self._scheduler.request_motion(decision.motion_group, decision.priority, decision.purpose)
+        else:
+            command = self._scheduler.request_fixed_motion(decision.motion_group, decision.fixed_index, decision.priority, decision.purpose)
+        if command is not None and expression is not None:
+            command = ScheduledMotion(command.group, command.index, command.priority, command.purpose, expression)
+        return self._emit_scheduled(command)
+
     def tick(self) -> bool:
         return self._emit_scheduled(self._scheduler.tick())
 
@@ -177,6 +205,9 @@ class SharedRendererService:
                 elif isinstance(intent, Mapping) and intent.get("type") == "thinking_changed":
                     data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.set_thinking(data.get("active") is True))
+                elif isinstance(intent, Mapping) and intent.get("type") == "sakiko_conversion":
+                    data = intent.get("data", {})
+                    handled += int(isinstance(data, Mapping) and self._host.start_sakiko_conversion(data.get("value"), data.get("model_urls", {})))
                 continue
             data = intent.get("data", {})
             if not isinstance(data, Mapping):

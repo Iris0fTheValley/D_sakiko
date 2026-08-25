@@ -65,5 +65,10 @@ class RendererHostTest(unittest.TestCase):
         host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_groups":{"text_generating":1}}})
         self.assertTrue(host.set_thinking(True)); self.assertEqual(self.out[-1], {"type":"thinking_changed","data":{"active":True}})
         clock.value = 1.0; self.assertTrue(host.tick()); self.assertEqual(self.out[-1]["data"]["group"], "text_generating")
+    def test_conversion_waits_for_reloaded_renderer_catalog_before_exact_motion(self):
+        host = SharedRendererHost(self.out.append, SharedLive2DBehavior(rng=Random(1)), SharedBehaviorScheduler(clock=lambda: 0.0, rng=Random(1)))
+        self.assertTrue(host.start_sakiko_conversion(False, {"white":"white.model.json"})); self.assertEqual(self.out[-1]["type"], "switch_live2d")
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"sakiko","motion_groups":{"change_character":1}}})
+        self.assertEqual((self.out[-1]["type"],self.out[-1]["data"]["group"],self.out[-1]["data"]["priority"]), ("play_motion","change_character",2))
 
 if __name__ == '__main__': unittest.main()
