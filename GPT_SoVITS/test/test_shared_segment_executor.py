@@ -10,6 +10,8 @@ if script_dir not in sys.path:
 
 from live2d_support.shared_behavior import ExactMotion, PlaySegment
 from live2d_support.shared_segment_executor import PygameSharedSegmentExecutor
+from live2d_support.shared_segment_executor import PygameScheduledMotionExecutor
+from live2d_support.behavior_scheduler import ScheduledMotion
 
 
 class FakeRuntime:
@@ -57,6 +59,14 @@ class PygameSharedSegmentExecutorTestCase(unittest.TestCase):
         self.assertFalse(PygameSharedSegmentExecutor(runtime, lambda kind, token: facts.append((kind, token))).execute(audio_only))
         self.assertEqual(runtime.calls, [])
         self.assertEqual(facts, [("motion_rejected", "cmd")])
+
+    def test_scheduler_motion_is_executed_exactly(self) -> None:
+        runtime = FakeRuntime(True)
+        started, finished = [], []
+        command = ScheduledMotion("IDLE_C", 1, 1, "timed_idle")
+        self.assertTrue(PygameScheduledMotionExecutor(runtime).execute(command, lambda: started.append(True), lambda: finished.append(True)))
+        self.assertEqual(runtime.calls, [("motion", "IDLE_C", 1, 1, None, False)])
+        self.assertEqual((started, finished), ([True], [True]))
 
 
 if __name__ == "__main__":

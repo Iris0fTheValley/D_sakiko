@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from live2d_support.shared_behavior import PlaySegment
+from live2d_support.behavior_scheduler import ScheduledMotion
 
 
 class ExactMotionRuntime(Protocol):
@@ -43,3 +44,21 @@ class PygameSharedSegmentExecutor:
         if not started:
             self._emit_fact("motion_rejected", command.command_id)
         return started
+
+
+class PygameScheduledMotionExecutor:
+    """Execute a scheduler-owned exact motion with adapter-only callbacks."""
+
+    def __init__(self, runtime: ExactMotionRuntime) -> None:
+        self._runtime = runtime
+
+    def execute(self, command: ScheduledMotion, on_start: Callable[..., object], on_finish: Callable[..., object]) -> bool:
+        return self._runtime.StartMotion(
+            command.group,
+            command.index,
+            command.priority,
+            on_start,
+            on_finish,
+            position=None,
+            auto_expression=False,
+        )
