@@ -254,6 +254,8 @@ class Live2DBehaviorController:
         cause = str(event_id or self._new_event_id())
         with self._lock:
             self._ensure_open_locked()
+            if self._state == "switching":
+                return ""
             self._thinking = True
             self._thinking_turn_id = str(turn_id)
             self._thinking_due = self._clock() + self._config.thinking_first_delay
@@ -320,6 +322,8 @@ class Live2DBehaviorController:
         group = str(motion_group or motion_group_for_emotion(str(emotion), default=""))
         with self._lock:
             self._ensure_open_locked()
+            if self._state == "switching":
+                return ""
             self._cancel_segment_locked("superseded", cause)
             self._thinking = False
             self._thinking_turn_id = ""
@@ -371,6 +375,8 @@ class Live2DBehaviorController:
         cause = str(event_id or self._new_event_id())
         with self._lock:
             self._ensure_open_locked()
+            if self._state == "switching":
+                return None
             now = self._clock()
             if now - self._last_click_at < self._config.click_throttle:
                 token = ""
@@ -414,6 +420,8 @@ class Live2DBehaviorController:
         cause = str(event_id or self._new_event_id())
         with self._lock:
             self._ensure_open_locked()
+            if self._state == "switching":
+                return None
             if self._sakiko_mask_on is True:
                 groups = ("change_character_maskoff",)
             elif self._sakiko_mask_on is False:
@@ -891,6 +899,8 @@ class Live2DBehaviorController:
         turn_id: str,
         segment_id: str,
     ) -> str:
+        if self._state == "switching":
+            return ""
         count = self._effective_catalog_locked().get(group, 0)
         if count <= 0:
             return ""

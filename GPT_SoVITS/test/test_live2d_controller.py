@@ -160,6 +160,81 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertEqual(controller.snapshot()["state"], "idle")
         self.assertEqual(sum(item["type"] == "model_switch_failed" for item in commands), 1)
 
+    def test_cold_start_bootstrap_ready_cannot_release_or_override_model_switch(self):
+        commands = []
+        controller = Live2DBehaviorController(
+            commands.append,
+            rng=random.Random(3),
+            motion_catalog={"happiness": 1, "IDLE": 1},
+            session_id="cold-start-session",
+        )
+
+        # The bootstrap model is only a renderer registration fact.
+        self.assertTrue(controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": "bootstrap-ready",
+            "session_id": "cold-start-session",
+            "data": {
+                "renderer_id": "window-a",
+                "model_token": "",
+                "motion_groups": {"happiness": 1, "IDLE": 1},
+                "expression_ids": ["idle", "serious"],
+            },
+        }))
+        model_token = controller.switch_model({
+            "model_url": "http://127.0.0.1:9877/model/bootstrap.json",
+            "transition_groups": [],
+        })
+
+        # The ready fact emitted by the bootstrap model is stale now.
+        self.assertFalse(controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": "stale-bootstrap-ready",
+            "session_id": "cold-start-session",
+            "data": {
+                "renderer_id": "window-a",
+                "model_token": "",
+                "motion_groups": {"happiness": 1, "IDLE": 1},
+            },
+        }))
+        self.assertEqual(controller.snapshot()["state"], "switching")
+        self.assertEqual(controller.start_thinking("cold-turn"), "")
+        self.assertEqual(controller.start_emotion_segment(
+            turn_id="cold-turn",
+            segment_id="cold-segment",
+            emotion="happiness",
+            audio_url="http://127.0.0.1:9877/audio/cold.wav",
+        ), "")
+        self.assertEqual(controller.snapshot()["state"], "switching")
+
+        # Only the authoritative token completes the bootstrap switch.
+        self.assertTrue(controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": "authoritative-ready",
+            "session_id": "cold-start-session",
+            "data": {
+                "renderer_id": "window-a",
+                "model_token": model_token,
+                "motion_groups": {"happiness": 1, "IDLE": 1},
+                "expression_ids": ["idle", "serious"],
+                "capabilities": {"audio": True},
+            },
+        }))
+        self.assertNotEqual(controller.snapshot()["state"], "switching")
+
+        controller.start_thinking("cold-turn")
+        controller.start_emotion_segment(
+            turn_id="cold-turn",
+            segment_id="cold-segment",
+            emotion="happiness",
+            audio_url="http://127.0.0.1:9877/audio/cold.wav",
+        )
+        command_types = [item["type"] for item in commands]
+        self.assertIn("thinking_changed", command_types)
+        self.assertIn("play_motion", command_types)
+        self.assertIn("set_expression", command_types)
+        self.assertIn("play_audio", command_types)
+
     def test_theme_color_is_broadcast_without_changing_behavior_state(self):
         before = self.controller.snapshot()["state"]
         event_id = self.controller.set_theme_color("#12abEF")

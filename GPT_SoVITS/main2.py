@@ -82,6 +82,40 @@ def electron_emit(command: dict[str, object]) -> None:
     electron_bridge.event_queue.put(command)
 
 
+def _switch_electron_model(model: dict[str, object]) -> str:
+    """Start an authoritative model switch and invalidate the readiness gate."""
+    if electron_controller is None:
+        return ""
+    electron_renderer_ready.clear()
+    return str(electron_controller.switch_model(model) or "")
+
+
+def _renderer_ready_completed_model_switch(
+    message: dict[str, object],
+    accepted: bool,
+    after: dict[str, object],
+) -> bool:
+    """Return whether one accepted ready fact completed the current model switch.
+
+    A bootstrap ready fact is accepted as renderer registration, but it is not
+    a business-ready signal.  A ready fact with a non-empty model token is
+    sufficient only after the controller has accepted it and is no longer
+    switching.  This also covers a renderer reconnecting to an already
+    confirmed model.
+    """
+    if not accepted:
+        return False
+    raw_data = message.get("data")
+    data = raw_data if isinstance(raw_data, dict) else {}
+    ready_token = str(data.get("token") or data.get("model_token") or "")
+    return bool(
+        ready_token
+        and str(after.get("state") or "") != "switching"
+        and not str(after.get("model_token") or "")
+        and bool(after.get("model"))
+    )
+
+
 def electron_audio_url(audio_path: str) -> str:
     """Convert a generated-audio path into the bridge's constrained URL space."""
     absolute = os.path.abspath(os.path.join(script_dir, audio_path))
@@ -194,7 +228,7 @@ def electron_renderer_loop() -> None:
             if command_type == "cancel_turn":
                 electron_controller.reset()
             elif command_type == "switch_live2d":
-                electron_controller.switch_model(_build_electron_model_switch(ui_command))
+                _switch_electron_model(_build_electron_model_switch(ui_command))
             elif command_type == "set_theme_color":
                 try:
                     electron_controller.set_theme_color(str(ui_command.get("theme_color") or ""))
@@ -210,7 +244,7 @@ def electron_renderer_loop() -> None:
         if sakiko_state is True or sakiko_state is False:
             model = resolve_electron_sakiko_model(sakiko_state)
             if model is not None:
-                electron_controller.switch_model(model)
+                _switch_electron_model(model)
         elif sakiko_state == "maskoff":
             # The Python behavior controller chooses the group and index once;
             # Electron renderers only execute the resulting command.
@@ -242,7 +276,7 @@ def electron_renderer_loop() -> None:
                 # source of Sakiko variant state.
                 initial_model = resolve_electron_sakiko_model(True)
                 if initial_model is not None:
-                    electron_controller.switch_model(initial_model)
+                    _switch_electron_model(initial_model)
             continue
         # Renderer sessions are transport sessions; controller session is the
         # authoritative behavior epoch and is attached at the process boundary.
@@ -264,9 +298,15 @@ def electron_renderer_loop() -> None:
                 if electron_ui_commands is not None:
                     electron_ui_commands.put({"type": str(data["intent"])})
             continue
-        electron_controller.handle_renderer_event(message)
+        accepted = electron_controller.handle_renderer_event(message)
+        after_ready_snapshot = electron_controller.snapshot()
         if str(message.get("type") or "") == "renderer_ready":
-            electron_renderer_ready.set()
+            if _renderer_ready_completed_model_switch(
+                message,
+                accepted,
+                after_ready_snapshot,
+            ):
+                electron_renderer_ready.set()
         elif str(message.get("type") or "") == "renderer_disconnected":
             if not electron_controller.snapshot().get("renderer_ids"):
                 electron_renderer_ready.clear()
@@ -439,7 +479,7 @@ def handle_electron_model_response_payload(payload: dict[str, object]) -> None:
             # Publish the generated segment immediately.  Text display must
             # not wait for the audio/motion lifecycle to finish.
             dp2qt_queue.put(build_assistant_segment_event(payload, segment_raw, audio_path or "NO_AUDIO"))
-            electron_controller.start_emotion_segment(
+            segment_started = electron_controller.start_emotion_segment(
                 turn_id=turn_id,
                 segment_id=segment_id,
                 emotion=emotion_label,
@@ -447,6 +487,11 @@ def handle_electron_model_response_payload(payload: dict[str, object]) -> None:
                 audio_duration=_audio_duration_seconds(audio_path) if audio_path else 0.0,
                 text=translation,
             )
+            if not segment_started:
+                main_logger.warning("Live2D 模型仍在切换，放弃当前片段以避免覆盖模型切换")
+                turn_status = "cancelled"
+                mark_segments_no_audio(payload, segments_raw, index)
+                waiter.set()
             while not waiter.wait(0.25):
                 if is_payload_turn_cancelled(payload):
                     turn_status = "cancelled"
