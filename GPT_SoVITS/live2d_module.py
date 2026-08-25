@@ -36,6 +36,7 @@ from live2d_support.runtime_adapter import (
     release_live2d_runtime,
 )
 from live2d_support.motion_semantics import motion_group_for_emotion
+from live2d_support.shared_behavior import SharedLive2DBehavior
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -445,6 +446,9 @@ class Live2DModule:
         current_runtime = None
         current_runtime_version = None
         model: Live2DModelProtocol = NullLive2DModel()
+        # Shadow-only until the normalized trace gate proves parity.  The
+        # existing Pygame branch below remains the authoritative executor.
+        shared_behavior_shadow = SharedLive2DBehavior()
         if self.PATH_JSON is not None:
             try:
                 current_runtime_version = detect_live2d_runtime_version(self.PATH_JSON)
@@ -956,6 +960,31 @@ class Live2DModule:
                 if not motion_group:
                     logger.warning("忽略未知情感标签：%s", emotion)
                     continue
+                if isinstance(model, Live2DModelAdapter):
+                    shared_behavior_shadow.set_model_catalog(
+                        model.motion_files_by_group,
+                        model.expression_ids,
+                    )
+                    shadow_command = shared_behavior_shadow.start_emotion_segment(
+                        turn_id="pygame-shadow",
+                        segment_id=str(emotion),
+                        emotion=str(emotion),
+                        audio_path=this_turn_audio_file_path,
+                    )
+                    if shadow_command is None:
+                        logger.warning(
+                            "共享 Live2D shadow 无法解析旧情绪动作：emotion=%s group=%s",
+                            emotion,
+                            motion_group,
+                        )
+                    else:
+                        logger.debug(
+                            "共享 Live2D shadow 命令：emotion=%s motion=%s[%d] expression=%s",
+                            emotion,
+                            shadow_command.motion.group,
+                            shadow_command.motion.index,
+                            shadow_command.motion.expression_id,
+                        )
                 self._prepare_long_audio_motion_loop(motion_group, this_turn_audio_file_path)
                 self.motion_is_over = False
                 started = model.StartRandomMotion(motion_group,3,lambda *args:self.onStartCallback_emotion_version(audio_file_path=this_turn_audio_file_path),self.onFinishCallback, position="C")
