@@ -23,6 +23,9 @@ import audio_generator
 import live2d_module
 import qtUI
 from chat.chat import get_chat_manager
+from live2d_support.authoritative_owner import AuthoritativeLive2DOwner
+from live2d_support.legacy_intent_fanout import LegacyEmotionAudioFanout
+from live2d_support.renderer_host import SharedRendererService
 
 from emotion_enum import EmotionEnum
 from log import setup_logging, get_logger, get_log_queue, setup_worker_logging, shutdown_logging
@@ -493,6 +496,23 @@ if __name__=='__main__':
     text_queue=Queue()
     emotion_queue=multiprocessing.Queue()
     audio_file_path_queue=multiprocessing.Queue()
+    # Shadow phase: all legacy writers keep using the original ingress queues,
+    # while a single relay mirrors each paired input to Pygame and to the future
+    # authoritative owner.  The two consumers therefore never race for a FIFO.
+    pygame_emotion_queue=multiprocessing.Queue()
+    pygame_audio_file_path_queue=multiprocessing.Queue()
+    owner_intent_queue=multiprocessing.Queue()
+    renderer_fact_queue=multiprocessing.Queue()
+    shadow_command_queue=multiprocessing.Queue()
+    owner_stop_event=threading.Event()
+    authoritative_owner=AuthoritativeLive2DOwner()
+    legacy_intent_fanout=LegacyEmotionAudioFanout(
+        emotion_queue, audio_file_path_queue,
+        pygame_emotion_queue, pygame_audio_file_path_queue, owner_intent_queue,
+    )
+    shared_renderer_service=SharedRendererService(
+        owner_intent_queue, renderer_fact_queue, shadow_command_queue, authoritative_owner,
+    )
     is_audio_play_complete=Queue()
     is_text_generating_queue=multiprocessing.Queue()
     dp2qt_queue=Queue()
@@ -564,7 +584,7 @@ if __name__=='__main__':
     # 在 MacOS 下，所有的 NSWindow（Qt 窗口）只能在独立进程中创建，不可以在子线程中创建窗口。
     # 由于 live2d 模块会创建一个窗口，我们必须使用多进程而非多线程实现并行。
     main_logger.info("加载Live2D界面中...")
-    tr1=multiprocessing.Process(target=live2d_module.run_live2d_process,args=(emotion_queue,audio_file_path_queue,is_text_generating_queue,char_is_converted_queue,change_char_queue,live2d_text_queue,is_display_text_value,motion_complete_value, desktop_w, desktop_h, get_log_queue()))
+    tr1=multiprocessing.Process(target=live2d_module.run_live2d_process,args=(pygame_emotion_queue,pygame_audio_file_path_queue,is_text_generating_queue,char_is_converted_queue,change_char_queue,live2d_text_queue,is_display_text_value,motion_complete_value, desktop_w, desktop_h, get_log_queue(),renderer_fact_queue))
     # LLM 生成模块（该模块为不同线程）
     tr2=threading.Thread(target=dp_chat.text_generator,args=(text_queue,
                                                              is_audio_play_complete,
@@ -581,6 +601,8 @@ if __name__=='__main__':
     tr4 = UpdateConfigThread("d_sakiko_config")
     tr4.reload_requested.connect(d_sakiko_config.reload_from_disk)
     tr1.start()
+    threading.Thread(target=legacy_intent_fanout.run, args=(owner_stop_event,), daemon=True).start()
+    threading.Thread(target=shared_renderer_service.run, args=(owner_stop_event,), daemon=True).start()
     tr2.start()
     tr3.start()
     tr4.start()
@@ -624,6 +646,7 @@ if __name__=='__main__':
         emotion_queue.put('bye')
     except Exception:
         pass
+    owner_stop_event.set()
     try:
         # 主窗口
         QT_message_queue.put('bye')
