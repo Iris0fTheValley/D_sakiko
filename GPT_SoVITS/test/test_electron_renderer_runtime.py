@@ -10,4 +10,10 @@ class ElectronRendererRuntimeTest(unittest.TestCase):
   runtime.renderer_fact_queue.put({"type":"renderer_ready","data":{"motion_groups":{"happiness":1}}})
   runtime.pump_once(); audio.put("a.wav"); emotions.put("LABEL_0"); self.assertEqual(runtime.pump_once(),2)
   self.assertEqual(runtime.command_queue.get_nowait()["type"],"play_motion")
+ def test_projects_existing_thinking_queue_only_on_state_edges(self):
+  emotions,audio,thinking=Queue(),Queue(),Queue(); runtime=ElectronRendererRuntime(emotions,audio,thinking)
+  runtime.renderer_fact_queue.put({"type":"renderer_ready","data":{"motion_groups":{"text_generating":1}}})
+  self.assertEqual(runtime.pump_once(), 3); self.assertEqual(runtime.command_queue.get_nowait(), {"type":"thinking_changed","data":{"active":False}})
+  self.assertEqual(runtime.pump_once(), 0)
+  thinking.put("no_complete"); self.assertEqual(runtime.pump_once(), 2); self.assertEqual(runtime.command_queue.get_nowait(), {"type":"thinking_changed","data":{"active":True}})
 if __name__=='__main__': unittest.main()
