@@ -72,4 +72,17 @@ class RendererHostTest(unittest.TestCase):
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"sakiko","motion_groups":{"change_character":1}}})
         self.assertEqual((self.out[-1]["type"],self.out[-1]["data"]["group"],self.out[-1]["data"]["priority"]), ("play_motion","change_character",2))
 
+    def test_reconnect_ready_does_not_reset_an_active_segment(self):
+        self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","motion_groups":{"happiness":1}}})
+        self.assertTrue(self.host.start_emotion_segment(turn_id="t", segment_id="s", emotion="LABEL_0", audio_path="a.wav"))
+        token = self.out[-1]["data"]["token"]
+        self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","motion_groups":{"happiness":1}}})
+        self.host.handle_renderer_fact({"type":"motion_started","data":{"renderer_id":"pygame","token":token}})
+        self.assertEqual(self.out[-1]["type"], "play_audio")
+
+    def test_stale_renderer_facts_are_rejected_after_renderer_selection(self):
+        self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","motion_groups":{"happiness":1}}})
+        self.assertFalse(self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"electron","motion_groups":{"happiness":1}}}))
+        self.assertFalse(self.host.handle_renderer_fact({"type":"motion_finished","data":{"renderer_id":"electron","token":"stale"}}))
+
 if __name__ == '__main__': unittest.main()

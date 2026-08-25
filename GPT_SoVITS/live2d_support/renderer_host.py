@@ -27,6 +27,7 @@ class SharedRendererHost:
         self._bye_token = ""
         self._scheduled_tokens: dict[str, str] = {}
         self._renderer_is_sakiko = False
+        self._renderer_id = ""
         self._sakiko_conversion = owner.sakiko_conversion
         self._pending_conversion: SakikoConversionDecision | None = None
 
@@ -66,9 +67,16 @@ class SharedRendererHost:
         if not isinstance(data, Mapping):
             return False
         if message.get("type") == "renderer_ready":
-            self._scheduled_tokens.clear()
-            self._scheduler.set_audio_busy(False)
-            self._scheduler.set_motion_over(True)
+            renderer_id = str(data.get("renderer_id") or "")
+            # A reconnect is a capability refresh, not an audio/motion-idle
+            # fact.  In particular, it must not silently complete an active
+            # segment.  A host instance accepts one selected renderer only;
+            # facts from another renderer are stale unless a later lifecycle
+            # owner creates a new host for that renderer session.
+            if self._renderer_id and renderer_id and renderer_id != self._renderer_id:
+                return False
+            if renderer_id:
+                self._renderer_id = renderer_id
             motion_files = data.get("motion_files_by_group")
             expression_ids = data.get("expression_ids", ())
             if isinstance(motion_files, Mapping):
@@ -82,6 +90,9 @@ class SharedRendererHost:
                 pending, self._pending_conversion = self._pending_conversion, None
                 self._emit_conversion_motion(pending)
             return True
+        fact_renderer_id = str(data.get("renderer_id") or "")
+        if self._renderer_id and fact_renderer_id and fact_renderer_id != self._renderer_id:
+            return False
         if message.get("type") == "renderer_intent" and data.get("intent") == "click":
             command = self._scheduler.click(is_sakiko=self._renderer_is_sakiko)
             return self._emit_scheduled(command)
