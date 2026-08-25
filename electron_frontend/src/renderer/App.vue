@@ -101,12 +101,6 @@ function connectWebSocket(sm: Live2DStateMachine) {
         reloadCustomModel(msg.data.model_url, msg.data.character_folder)
         return
       }
-      // char_converted: 黑白祥 / mask
-      if (msg.type === 'char_converted') {
-        const { value, model_url } = msg.data || {}
-        if (model_url) { reloadCustomModel(model_url, 'sakiko'); return }
-        // maskoff：不切换模型，只推送到状态机播动画
-      }
       const command = msg.type === 'live2d_command' ? msg.data?.command : { type: msg.type, data: msg.data }
       sm.pushCommand(command)
     } catch(e) { console.warn('[WS] Parse:', e) }
