@@ -32,13 +32,15 @@ class Bridge:
 
     def __init__(self, bridge_queue, motion_queue=None, audio_base=None, renderer_fact_queue=None, renderer_command_queue=None):
         self.bridge_q = bridge_queue
-        self.motion_q = motion_queue
+        # Kept only for compatibility with callers that have not dropped the
+        # parameter yet.  This bridge must never consume it: the old Pygame
+        # events are renderer-local decisions, not authoritative commands.
+        del motion_queue
         self.audio_base = audio_base  # 音频文件根目录，用于 HTTP 静态服务
         self.renderer_fact_queue = renderer_fact_queue
         self.renderer_command_queue = renderer_command_queue
         self.ws = WSServer(on_message=self._on_renderer_message)
         self._reader_thread: Optional[threading.Thread] = None
-        self._motion_reader_thread: Optional[threading.Thread] = None
         self._renderer_command_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -72,12 +74,6 @@ class Bridge:
             target=self._reader, daemon=True
         )
         self._reader_thread.start()
-        # 开启 motion_event_queue reader（从 Pygame 进程读取动作事件）
-        if self.motion_q is not None:
-            self._motion_reader_thread = threading.Thread(
-                target=self._motion_reader, daemon=True
-            )
-            self._motion_reader_thread.start()
         if self.renderer_command_queue is not None:
             self._renderer_command_reader_thread = threading.Thread(
                 target=self._renderer_command_reader, daemon=True
@@ -96,27 +92,6 @@ class Bridge:
                 asyncio.run_coroutine_threadsafe(
                     self.ws.broadcast(msg['type'], msg['data']), loop
                 )
-
-    def _motion_reader(self):
-        """从 Pygame 进程的 motion_event_queue 读取动作/表情事件 → WS 广播"""
-        loop = self._loop
-        while True:
-            try:
-                event = self.motion_q.get(timeout=5)
-            except Exception:
-                continue
-            if event is None:
-                break
-            if loop is not None:
-                # 区分动作事件和表情事件
-                if isinstance(event, dict) and event.get('type') == 'expression':
-                    asyncio.run_coroutine_threadsafe(
-                        self.ws.broadcast('expression', event), loop
-                    )
-                else:
-                    asyncio.run_coroutine_threadsafe(
-                        self.ws.broadcast('motion', event), loop
-                    )
 
     def _renderer_command_reader(self):
         """Forward already-decided renderer commands without interpreting them."""

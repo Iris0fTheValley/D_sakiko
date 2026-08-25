@@ -25,6 +25,11 @@ class BridgeRuntimeFactTest(unittest.TestCase):
         bridge = Bridge(Queue(), renderer_command_queue=commands)
         self.assertIs(bridge.renderer_command_queue, commands)
 
+    def test_legacy_pygame_motion_queue_cannot_create_an_electron_executor(self):
+        bridge = Bridge(Queue(), motion_queue=Queue())
+        self.assertFalse(hasattr(bridge, "_motion_reader_thread"))
+        self.assertFalse(hasattr(bridge, "_motion_reader"))
+
 
 if __name__ == "__main__":
     unittest.main()
