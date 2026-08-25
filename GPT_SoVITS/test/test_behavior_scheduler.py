@@ -35,5 +35,9 @@ class SchedulerTest(unittest.TestCase):
         self.clock.value = 25.0; self.s.set_audio_busy(True); self.assertIsNone(self.s.timed_idle_due())
         self.s.set_audio_busy(False); self.clock.value = 49.9; self.assertIsNone(self.s.timed_idle_due())
         self.clock.value = 50.0; self.assertEqual(self.s.timed_idle_due().purpose, "timed_idle")
+    def test_idle_recovery_uses_renderer_motion_fact(self):
+        self.clock.value = 2.5; self.s.set_motion_over(False); self.assertIsNone(self.s.idle_recover_due())
+        self.s.set_motion_over(True); self.assertIsNone(self.s.idle_recover_due())
+        self.clock.value = 5.0; self.assertEqual(self.s.idle_recover_due().purpose, "idle_recover")
 
 if __name__ == '__main__': unittest.main()

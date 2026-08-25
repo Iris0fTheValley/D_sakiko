@@ -52,7 +52,7 @@ class PygameScheduledMotionExecutor:
     def __init__(self, runtime: ExactMotionRuntime) -> None:
         self._runtime = runtime
 
-    def execute(self, command: ScheduledMotion, on_start: Callable[..., object], on_finish: Callable[..., object]) -> bool:
+    def execute(self, command: ScheduledMotion, on_start: Callable[..., object] | None, on_finish: Callable[..., object] | None) -> bool:
         if command.expression_id is not None:
             self._runtime.set_expression_if_supported(command.expression_id)
         return self._runtime.StartMotion(

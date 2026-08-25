@@ -863,6 +863,7 @@ class Live2DModule:
                 shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
                 shared_scheduler.set_thinking(not is_text_generating_queue.empty())
                 shared_scheduler.set_audio_busy(pygame.mixer.music.get_busy())
+                shared_scheduler.set_motion_over(self.motion_is_over)
                 if not is_text_generating_queue.empty() and self.think_motion_is_over:
                     scheduled_motion = shared_scheduler.tick()
                     if scheduled_motion is not None and scheduled_motion.purpose == "thinking":
@@ -885,7 +886,15 @@ class Live2DModule:
                 else:
                     pygame.display.set_caption(f"{self.current_character.character_name}")
 
-            if self.motion_is_over and not pygame.mixer.music.get_busy():  #恢复idle动作
+            if isinstance(model, Live2DModelAdapter):
+                scheduled_motion = shared_scheduler.idle_recover_due()
+                if scheduled_motion is not None:
+                    PygameScheduledMotionExecutor(model).execute(
+                        scheduled_motion,
+                        lambda *args: (shared_scheduler.motion_started("idle_recover"), self.onStartCallback()),
+                        None,
+                    )
+            elif self.motion_is_over and not pygame.mixer.music.get_busy():  # Null runtime compatibility
                 if is_text_generating_queue.empty() and time.time()-idle_recover_timer>2.5:
                     model.StartRandomMotion("idle_motion", 1, self.onStartCallback, position="C")
 

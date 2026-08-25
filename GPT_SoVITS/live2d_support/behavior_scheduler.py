@@ -69,6 +69,12 @@ class SharedBehaviorScheduler:
             self._long_enabled = False
             self._long_due = None
 
+    def set_motion_over(self, motion_over: bool) -> None:
+        """Receive the renderer's actual callback-derived motion fact."""
+        if motion_over and not self._motion_over:
+            self._idle_recover_due = self._clock() + 2.5
+        self._motion_over = motion_over
+
     def start_segment(self, group: str, audio_duration_seconds: float) -> None:
         self._thinking = False
         self._thinking_due = None
@@ -130,6 +136,13 @@ class SharedBehaviorScheduler:
         if self._audio_busy or self._thinking:
             return None
         return self._exact("IDLE", 1, "timed_idle")
+
+    def idle_recover_due(self) -> ScheduledMotion | None:
+        if not self._motion_over or self._audio_busy or self._thinking:
+            return None
+        if self._clock() < self._idle_recover_due:
+            return None
+        return self._exact("idle_motion", 1, "idle_recover")
 
     def _exact(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
         resolved_group = self._resolved_groups.get(group, group)
