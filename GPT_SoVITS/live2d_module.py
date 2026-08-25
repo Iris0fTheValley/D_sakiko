@@ -1035,7 +1035,8 @@ class Live2DModule:
                                 self.motion_is_over = True
                                 self._reset_long_audio_motion_loop()
 
-                        self._prepare_long_audio_motion_loop(motion_group, this_turn_audio_file_path)
+                        audio_duration = self._get_audio_duration_seconds(this_turn_audio_file_path)
+                        shared_scheduler.start_segment(motion_group, audio_duration)
                         self.motion_is_over = False
                         PygameSharedSegmentExecutor(model, on_shared_segment_fact).execute(shared_command)
                         self.think_motion_is_over = True
@@ -1054,7 +1055,18 @@ class Live2DModule:
 
 
             # 清除缓冲区
-            self._update_long_audio_motion_loop(model)
+            if isinstance(model, Live2DModelAdapter):
+                shared_scheduler.set_audio_busy(pygame.mixer.music.get_busy())
+                shared_scheduler.set_motion_over(self.motion_is_over)
+                scheduled_motion = shared_scheduler.long_audio_due()
+                if scheduled_motion is not None:
+                    PygameScheduledMotionExecutor(model).execute(
+                        scheduled_motion,
+                        lambda *args: (shared_scheduler.motion_started("long_audio_repeat"), self.onStartCallback()),
+                        lambda *args: (shared_scheduler.motion_finished("long_audio_repeat"), self.onFinishCallback()),
+                    )
+            else:
+                self._update_long_audio_motion_loop(model)
 
             glClear(GL_COLOR_BUFFER_BIT)
             # 更新live2d到缓冲区
