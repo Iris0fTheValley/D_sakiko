@@ -191,8 +191,13 @@ export class Live2DRendererController {
     this.audioToken = String(data.token || data.audio_token || '')
     this.audioTurnId = String(data.turn_id || '')
     this.audioSegmentId = segmentId
-    const audio = new Audio(url)
+    // Configure CORS before assigning src.  Constructing with `new Audio(url)`
+    // can start the request before MediaElementAudioSourceNode can observe it,
+    // leaving the analyser waveform at zero while playback still sounds fine.
+    const audio = new Audio()
     audio.crossOrigin = 'anonymous'
+    audio.preload = 'auto'
+    audio.src = url
     this.currentAudio = audio
     audio.addEventListener('ended', () => {
       if (this.currentAudio !== audio) return
@@ -212,6 +217,11 @@ export class Live2DRendererController {
     })
     this.setupLipSync(audio)
     audio.play().then(() => {
+      // Chromium may keep an AudioContext suspended until the media element
+      // has actually started. Retry the analyser hookup at that point without
+      // creating a second audio element or changing the audio owner.
+      if (!this.analyser && this.currentAudio === audio) this.setupLipSync(audio)
+      void this.audioContext?.resume?.()
       this.report({ type: 'audio_started', event_id: command.event_id, data: { token: String(data.token || data.audio_token || ''), turn_id: data.turn_id || '', segment_id: segmentId, renderer_id: this.rendererId } })
     }).catch((error) => {
       if (this.currentAudio === audio) {
@@ -279,8 +289,14 @@ export class Live2DRendererController {
 
   private setupLipSync(audio: HTMLAudioElement): void {
     try {
-      if (!this.audioContext) this.audioContext = new AudioContext()
+      if (!this.audioContext) {
+        const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext
+        if (!AudioContextCtor) throw new Error('AudioContext is unavailable')
+        this.audioContext = new AudioContextCtor()
+      }
       if (this.audioContext.state === 'suspended') void this.audioContext.resume()
+      try { this.audioSource?.disconnect() } catch (_) { /* best effort */ }
+      try { this.analyser?.disconnect() } catch (_) { /* best effort */ }
       this.analyser = this.audioContext.createAnalyser()
       this.analyser.fftSize = 256
       this.audioSource = this.audioContext.createMediaElementSource(audio)
