@@ -30,14 +30,20 @@ AUDIO_PORT = 9877  # HTTP 静态文件服务端口，供 Electron 加载音频
 class Bridge:
     """简化的 Bridge 类，替代旧的 saki_launcher.py"""
 
-    def __init__(self, bridge_queue, motion_queue=None, audio_base=None):
+    def __init__(self, bridge_queue, motion_queue=None, audio_base=None, renderer_fact_queue=None):
         self.bridge_q = bridge_queue
         self.motion_q = motion_queue
         self.audio_base = audio_base  # 音频文件根目录，用于 HTTP 静态服务
-        self.ws = WSServer()
+        self.renderer_fact_queue = renderer_fact_queue
+        self.ws = WSServer(on_message=self._on_renderer_message)
         self._reader_thread: Optional[threading.Thread] = None
         self._motion_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    async def _on_renderer_message(self, message):
+        """Forward renderer facts verbatim; the shared state consumes them."""
+        if self.renderer_fact_queue is not None and isinstance(message, dict):
+            self.renderer_fact_queue.put(message)
 
     def start(self):
         """启动 WebSocket 服务 + 事件 reader 线程"""

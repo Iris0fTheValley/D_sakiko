@@ -8,6 +8,7 @@ import struct
 import json
 import sys
 import os
+import inspect
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from protocol import create_message
@@ -16,9 +17,10 @@ GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 class WSServer:
-    def __init__(self, host="localhost", port=9876):
+    def __init__(self, host="localhost", port=9876, on_message=None):
         self.host = host
         self.port = port
+        self.on_message = on_message
         self._clients = set()
         self._server = None
 
@@ -69,14 +71,23 @@ class WSServer:
 
         try:
             while True:
-                opcode = await self._read_frame(reader)
-                if opcode is None:
+                frame = await self._read_frame(reader)
+                if frame is None:
                     break
+                opcode, payload = frame
                 if opcode == 0x8:  # Close
                     await self._send_frame(writer, 0x8, b"")
                     break
                 if opcode == 0x9:  # Ping
                     await self._send_frame(writer, 0xA, b"")
+                if opcode == 0x1 and self.on_message is not None:
+                    try:
+                        message = json.loads(payload.decode("utf-8"))
+                        result = self.on_message(message)
+                        if inspect.isawaitable(result):
+                            await result
+                    except Exception:
+                        pass
         except Exception:
             pass
         finally:
@@ -114,7 +125,7 @@ class WSServer:
             for i in range(len(payload)):
                 payload[i] ^= mask[i % 4]
 
-        return opcode
+        return opcode, bytes(payload)
 
     async def _send_frame(self, writer, opcode, payload):
         """发送 WebSocket 文本帧"""
