@@ -20,6 +20,7 @@ class SharedBehaviorScheduler:
     def __init__(self, *, clock: Callable[[], float], rng: Random | None = None) -> None:
         self._clock, self._rng = clock, rng or Random()
         self._catalog: dict[str, int] = {}
+        self._resolved_groups: dict[str, str] = {}
         now = clock()
         self._thinking = False
         self._think_motion_over = True
@@ -35,6 +36,13 @@ class SharedBehaviorScheduler:
 
     def set_catalog(self, catalog: Mapping[str, int]) -> None:
         self._catalog = {str(group): int(count) for group, count in catalog.items() if int(count) > 0}
+        self._resolved_groups = {}
+        for group in self._catalog:
+            base, separator, suffix = group.rpartition("_")
+            if separator and suffix == "C":
+                self._resolved_groups[base] = group
+        for group in self._catalog:
+            self._resolved_groups.setdefault(group, group)
 
     def set_thinking(self, active: bool) -> None:
         self._thinking = active
@@ -102,7 +110,8 @@ class SharedBehaviorScheduler:
         return None
 
     def _exact(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
-        count = self._catalog.get(group, 0)
+        resolved_group = self._resolved_groups.get(group, group)
+        count = self._catalog.get(resolved_group, 0)
         if count <= 0:
             return None
-        return ScheduledMotion(group, self._rng.randrange(count), priority, purpose)
+        return ScheduledMotion(resolved_group, self._rng.randrange(count), priority, purpose)

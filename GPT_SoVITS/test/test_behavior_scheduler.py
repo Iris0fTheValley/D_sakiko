@@ -25,5 +25,8 @@ class SchedulerTest(unittest.TestCase):
     def test_idle_and_click_preserve_master_conditions(self):
         self.clock.value = 2.5; self.assertEqual(self.s.tick().purpose, "idle_recover")
         self.assertIsNone(self.s.click(is_sakiko=False)); self.assertEqual(self.s.click(is_sakiko=True).purpose, "click")
+    def test_center_variant_is_resolved_before_executor(self):
+        self.s.set_catalog({"IDLE": 1, "IDLE_C": 2})
+        self.assertEqual(self.s.click(is_sakiko=True).group, "IDLE_C")
 
 if __name__ == '__main__': unittest.main()
