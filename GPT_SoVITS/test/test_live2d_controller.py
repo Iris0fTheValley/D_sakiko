@@ -235,6 +235,47 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertIn("set_expression", command_types)
         self.assertIn("play_audio", command_types)
 
+    def test_model_switch_requested_before_first_renderer_registers_and_replays_load(self):
+        commands = []
+        controller = Live2DBehaviorController(
+            commands.append,
+            motion_catalog={"happiness": 1},
+            session_id="startup-order-session",
+        )
+        model_token = controller.switch_model({
+            "model_url": "http://127.0.0.1:9877/model/startup.json",
+            "transition_groups": [],
+        })
+        self.assertEqual(controller.snapshot()["state"], "switching")
+        self.assertEqual(controller.snapshot()["renderer_ids"], [])
+
+        self.assertTrue(controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": "startup-bootstrap-ready",
+            "session_id": "startup-order-session",
+            "data": {
+                "renderer_id": "window-a",
+                "model_token": "",
+                "motion_groups": {"happiness": 1},
+            },
+        }))
+        load_commands = [item for item in commands if item["type"] == "load_model"]
+        self.assertEqual(load_commands[-1]["data"]["token"], model_token)
+        self.assertEqual(load_commands[-1]["data"]["target_renderer_ids"], ["window-a"])
+        self.assertEqual(controller.snapshot()["state"], "switching")
+
+        self.assertTrue(controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": "startup-authoritative-ready",
+            "session_id": "startup-order-session",
+            "data": {
+                "renderer_id": "window-a",
+                "model_token": model_token,
+                "motion_groups": {"happiness": 1},
+            },
+        }))
+        self.assertNotEqual(controller.snapshot()["state"], "switching")
+
     def test_theme_color_is_broadcast_without_changing_behavior_state(self):
         before = self.controller.snapshot()["state"]
         event_id = self.controller.set_theme_color("#12abEF")

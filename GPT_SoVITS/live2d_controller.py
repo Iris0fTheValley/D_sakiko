@@ -629,7 +629,12 @@ class Live2DBehaviorController:
 
     def _on_renderer_ready_locked(self, renderer_id: str, data: Dict[str, Any]) -> bool:
         token = str(data.get("token") or data.get("model_token") or "")
-        if self._state == "switching" and self._model_token and token != self._model_token:
+        if (
+            self._state == "switching"
+            and self._model_token
+            and token != self._model_token
+            and renderer_id in self._model_expected
+        ):
             return False
         catalog = self._normalize_catalog(data.get("motion_groups", {}))
         capabilities = data.get("capabilities", {})
@@ -703,6 +708,24 @@ class Live2DBehaviorController:
                     "",
                     target_renderer_ids=[renderer_id],
                 )
+            return True
+        if renderer_id not in self._model_expected:
+            # A model switch can be requested by another startup queue before
+            # the first renderer has sent hello. Register that renderer now,
+            # then replay the authoritative load command to it. Without this
+            # path the switch keeps an empty expected set forever and the
+            # bootstrap ready fact can never become authoritative.
+            self._model_expected.add(renderer_id)
+            self._queue_command_locked(
+                "load_model",
+                {
+                    "cause_event_id": self._model_cause_event_id or self._new_event_id(),
+                    "token": self._model_token,
+                    "turn_id": self._model_turn_id,
+                    "model": dict(self._model),
+                    "target_renderer_ids": [renderer_id],
+                },
+            )
             return True
         self._model_ready.add(renderer_id)
         expected = self._model_expected or {renderer_id}
