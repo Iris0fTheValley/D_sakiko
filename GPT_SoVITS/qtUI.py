@@ -4388,6 +4388,11 @@ class ChatGUI(QWidget):
         palette = derive_theme_palette(seed)
         self.current_character.theme_seed = palette.accent
         self._apply_character_theme(palette)
+        if self.change_char_queue is not None:
+            self.change_char_queue.put({
+                "type": "set_theme_color",
+                "theme_color": palette.accent,
+            })
         if not self._save_character_theme_seed(palette.accent):
             QMessageBox.warning(
                 self,

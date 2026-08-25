@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 import random
+import re
 import threading
 import time
 import uuid
@@ -285,6 +286,23 @@ class Live2DBehaviorController:
             )
         self._flush()
         return cause
+
+    def set_theme_color(self, theme_color: str) -> str:
+        """Broadcast a renderer-only theme update without changing behavior state."""
+        color = str(theme_color or "").strip().upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", color):
+            raise ValueError("theme_color must be a #RRGGBB value")
+        with self._lock:
+            self._ensure_open_locked()
+            event_id = self._queue_command_locked(
+                "set_theme_color",
+                {
+                    "theme_color": color,
+                    "target_renderer_ids": sorted(self._renderers),
+                },
+            )
+        self._flush()
+        return event_id
 
     def start_emotion_segment(
         self,

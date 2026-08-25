@@ -138,6 +138,18 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertEqual(controller.snapshot()["state"], "idle")
         self.assertEqual(sum(item["type"] == "model_switch_failed" for item in commands), 1)
 
+    def test_theme_color_is_broadcast_without_changing_behavior_state(self):
+        before = self.controller.snapshot()["state"]
+        event_id = self.controller.set_theme_color("#12abEF")
+        theme_commands = [item for item in self.commands if item["type"] == "set_theme_color"]
+        self.assertEqual(len(theme_commands), 1)
+        self.assertEqual(theme_commands[0]["event_id"], event_id)
+        self.assertEqual(theme_commands[0]["data"]["theme_color"], "#12ABEF")
+        self.assertEqual(theme_commands[0]["data"]["target_renderer_ids"], ["window-a", "window-b"])
+        self.assertEqual(self.controller.snapshot()["state"], before)
+        with self.assertRaises(ValueError):
+            self.controller.set_theme_color("blue")
+
 
 if __name__ == "__main__":
     unittest.main()

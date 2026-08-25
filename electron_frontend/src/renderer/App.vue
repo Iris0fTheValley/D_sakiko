@@ -18,6 +18,9 @@ const currentCharKey = ref('sakiko')
 const customModelPath = ref('http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json')
 const pendingModelToken = ref('')
 const initialExpression = ref('serious')
+const themeColor = ref('#7799CC')
+const nearBorder = ref(false)
+let borderPollTimer: ReturnType<typeof setInterval> | null = null
 const rendererId = sessionStorage.getItem('live2d-renderer-id') || (() => {
   const id = crypto.randomUUID(); sessionStorage.setItem('live2d-renderer-id', id); return id
 })()
@@ -46,20 +49,47 @@ onMounted(() => {
   document.addEventListener('mouseleave', () => { mouseInWindow.value = false })
   document.addEventListener('mouseenter', () => { mouseInWindow.value = true })
 
+  // Reuse the donor/AIRI edge detection. Screen-coordinate polling continues
+  // to work while mouse-through is enabled, when renderer mouse events stop.
+  borderPollTimer = setInterval(async () => {
+    try {
+      const [pos, bounds] = await Promise.all([
+        window.electronAPI.getMousePosition(),
+        window.electronAPI.getWindowBounds(),
+      ])
+      const x = pos.x - bounds.x
+      const y = pos.y - bounds.y
+      const threshold = 10
+      const nearWindow = x >= -threshold && x <= bounds.width + threshold
+        && y >= -threshold && y <= bounds.height + threshold
+      nearBorder.value = nearWindow && (
+        x <= threshold || x >= bounds.width - threshold
+        || y <= threshold || y >= bounds.height - threshold
+      )
+    } catch {
+      nearBorder.value = false
+    }
+  }, 100)
 })
 
 function toggleFadeOnHover() {
   fadeOnHoverEnabled.value = !fadeOnHoverEnabled.value
 }
 
+function setThemeColor(color: unknown) {
+  if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return
+  themeColor.value = color.toUpperCase()
+}
+
 provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
 provide('toggleFadeOnHover', toggleFadeOnHover)
 
-function reloadCustomModel(path: string, charKey?: string, expression?: string) {
+function reloadCustomModel(path: string, charKey?: string, expression?: string, nextThemeColor?: unknown) {
   stateMachine.value = null
   customModelPath.value = path
   if (charKey) currentCharKey.value = charKey
   if (expression) initialExpression.value = expression
+  setThemeColor(nextThemeColor)
   stageKey.value++
 }
 
@@ -123,14 +153,19 @@ function connectWebSocket() {
             command.data.model.model_url,
             command.data.model.character_folder,
             command.data.model.initial_expression,
+            command.data.model.theme_color,
           )
+          return
+        }
+        if (command?.type === 'set_theme_color') {
+          setThemeColor(command.data?.theme_color)
           return
         }
         if (command?.type) stateMachine.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
         return
       }
       if (msg.type === 'model_switch' && msg.data?.model_url) {
-        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.initial_expression)
+        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.initial_expression, msg.data.theme_color)
         return
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
@@ -164,7 +199,11 @@ function disconnectWebSocket() {
   if (ws) { ws.onopen=null; ws.onclose=null; ws.onerror=null; ws.onmessage=null; try{ws.close()}catch(_){}; ws=null }
 }
 
-onUnmounted(() => disconnectWebSocket())
+onUnmounted(() => {
+  disconnectWebSocket()
+  if (borderPollTimer) clearInterval(borderPollTimer)
+  borderPollTimer = null
+})
 </script>
 
 <template>
@@ -178,6 +217,12 @@ onUnmounted(() => disconnectWebSocket())
     <ResizeHandler />
     <ControlsIsland />
 
+    <div
+      class="window-edge-highlight"
+      :class="{ 'is-visible': nearBorder }"
+      :style="{ '--window-theme-color': themeColor }"
+      aria-hidden="true"
+    />
   </div>
 </template>
 
@@ -190,4 +235,38 @@ onUnmounted(() => disconnectWebSocket())
 .thinking-indicator { position:absolute; top:.5rem; left:50%; transform:translateX(-50%); padding:.25rem .75rem; font-size:12px; border-radius:.5rem; background:rgba(38,38,38,.8); color:#f59e0b; pointer-events:none; }
 .fade-enter-active,.fade-leave-active { transition:opacity .3s ease; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
+
+.window-edge-highlight {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid var(--window-theme-color);
+  border-radius: 12px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 280ms ease, visibility 0s linear 280ms,
+    border-color 700ms ease, box-shadow 700ms ease;
+}
+.window-edge-highlight.is-visible {
+  opacity: 0.68;
+  visibility: visible;
+  animation: window-edge-breathe 3.6s ease-in-out infinite;
+}
+@keyframes window-edge-breathe {
+  0%, 100% {
+    opacity: 0.52;
+    box-shadow: 0 0 4px color-mix(in srgb, var(--window-theme-color) 22%, transparent);
+  }
+  50% {
+    opacity: 0.78;
+    box-shadow: 0 0 7px color-mix(in srgb, var(--window-theme-color) 32%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .window-edge-highlight.is-visible {
+    animation: none;
+  }
+}
 </style>

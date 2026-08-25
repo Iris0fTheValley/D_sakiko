@@ -114,6 +114,7 @@ def resolve_electron_sakiko_model(sakiko_state: bool) -> dict[str, object] | Non
         "model_url": model_url,
         "character_folder": "sakiko",
         "character_name": "祥子",
+        "theme_color": character_theme_color("祥子"),
         "variant": "dark" if is_dark else "light",
         "initial_expression": "serious" if is_dark else "idle",
         "transition_groups": (
@@ -151,7 +152,13 @@ def electron_renderer_loop() -> None:
                     "model_url": model_url,
                     "character_folder": str(ui_command.get("character_folder_name") or ""),
                     "character_name": str(ui_command.get("character_name") or ""),
+                    "theme_color": character_theme_color(str(ui_command.get("character_name") or "")),
                 })
+            elif command_type == "set_theme_color":
+                try:
+                    electron_controller.set_theme_color(str(ui_command.get("theme_color") or ""))
+                except ValueError:
+                    main_logger.warning("忽略无效 Electron 主题色：%r", ui_command.get("theme_color"))
         # The old Pygame renderer consumed this queue directly.  Electron is
         # now the only renderer, so the shared controller must consume the
         # same business event and choose the model transition once here.
@@ -216,6 +223,12 @@ def get_character_by_name(character_name: str) -> character.CharacterAttributes 
         if one_character.character_name == character_name:
             return one_character
     return None
+
+
+def character_theme_color(character_name: str) -> str:
+    """Return the current role seed used by the Qt theme system."""
+    current = get_character_by_name(character_name)
+    return str(getattr(current, "theme_seed", "#7799CC") or "#7799CC")
 
 
 def build_assistant_segment_event(
