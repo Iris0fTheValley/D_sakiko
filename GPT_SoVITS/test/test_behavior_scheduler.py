@@ -30,6 +30,9 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual((command.group, command.priority, command.purpose), ("bye", 3, "bye"))
     def test_semantic_expression_is_resolved_centrally(self):
         self.s.set_model_catalog({}, ("exp_serious01",)); self.assertEqual(self.s.resolve_semantic_expression("serious"), "exp_serious01")
+    def test_fixed_motion_is_validated_by_shared_catalog(self):
+        self.s.set_catalog({"text_generating": 1}); self.assertEqual(self.s.request_fixed_motion("text_generating", 0, 3, "mask_white").index, 0)
+        self.assertIsNone(self.s.request_fixed_motion("text_generating", 1, 3, "mask_white"))
     def test_idle_and_click_preserve_master_conditions(self):
         self.clock.value = 2.5; self.assertEqual(self.s.tick().purpose, "idle_recover")
         self.assertIsNone(self.s.click(is_sakiko=False)); self.assertEqual(self.s.click(is_sakiko=True).purpose, "click")

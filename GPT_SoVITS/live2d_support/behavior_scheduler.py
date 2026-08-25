@@ -165,6 +165,15 @@ class SharedBehaviorScheduler:
     def resolve_semantic_expression(self, semantic_name: str) -> str | None:
         return select_supported_expression(semantic_expression_candidates(semantic_name) or (), self._expression_ids)
 
+    def choose_mask_initial_state(self) -> bool:
+        return self._rng.random() < 0.5
+
+    def request_fixed_motion(self, group: str, index: int, priority: int, purpose: str) -> ScheduledMotion | None:
+        resolved_group = self._resolved_groups.get(group, group)
+        if index < 0 or index >= self._catalog.get(resolved_group, 0):
+            return None
+        return ScheduledMotion(resolved_group, index, priority, purpose)
+
     def _exact(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
         resolved_group = self._resolved_groups.get(group, group)
         count = self._catalog.get(resolved_group, 0)
