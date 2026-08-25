@@ -8,9 +8,10 @@ from uuid import uuid4
 from typing import Any
 
 from live2d_support.renderer_contract import audio_command, motion_command, normalize_renderer_fact
-from live2d_support.shared_behavior import ExactMotion, PlaySegment, SharedLive2DBehavior, StartAudio
-from live2d_support.behavior_scheduler import ScheduledMotion, SharedBehaviorScheduler
+from live2d_support.shared_behavior import ExactMotion, PlaySegment, StartAudio
+from live2d_support.behavior_scheduler import ScheduledMotion
 from live2d_support.sakiko_conversion import SakikoConversionDecision, SharedSakikoConversion
+from live2d_support.authoritative_owner import AuthoritativeLive2DOwner
 
 
 CommandEmitter = Callable[[dict[str, Any]], None]
@@ -19,14 +20,14 @@ CommandEmitter = Callable[[dict[str, Any]], None]
 class SharedRendererHost:
     """Adapt shared behavior to a command/fact transport without SDK imports."""
 
-    def __init__(self, emit: CommandEmitter, behavior: SharedLive2DBehavior | None = None, scheduler: SharedBehaviorScheduler | None = None) -> None:
+    def __init__(self, emit: CommandEmitter, owner: AuthoritativeLive2DOwner) -> None:
         self._emit = emit
-        self._behavior = behavior or SharedLive2DBehavior()
-        self._scheduler = scheduler or SharedBehaviorScheduler(clock=time.monotonic)
+        self._behavior = owner.behavior
+        self._scheduler = owner.scheduler
         self._bye_token = ""
         self._scheduled_tokens: dict[str, str] = {}
         self._renderer_is_sakiko = False
-        self._sakiko_conversion = SharedSakikoConversion()
+        self._sakiko_conversion = owner.sakiko_conversion
         self._pending_conversion: SakikoConversionDecision | None = None
 
     def start_bye(self) -> bool:
@@ -76,7 +77,7 @@ class SharedRendererHost:
             else:
                 self._behavior.set_capabilities(data.get("motion_groups", {}))
                 self._scheduler.set_catalog(data.get("motion_groups", {}))
-            self._renderer_is_sakiko = str(data.get("renderer_id", "")).lower() == "sakiko"
+            self._renderer_is_sakiko = str(data.get("model_key", "")).lower() == "sakiko"
             if self._pending_conversion is not None:
                 pending, self._pending_conversion = self._pending_conversion, None
                 self._emit_conversion_motion(pending)
@@ -181,10 +182,10 @@ class SharedRendererHost:
 class SharedRendererService:
     """Queue adapter for bridge deployments; its policy remains in the host."""
 
-    def __init__(self, intent_queue, renderer_fact_queue, command_queue) -> None:
+    def __init__(self, intent_queue, renderer_fact_queue, command_queue, owner: AuthoritativeLive2DOwner) -> None:
         self._intents = intent_queue
         self._facts = renderer_fact_queue
-        self._host = SharedRendererHost(command_queue.put)
+        self._host = SharedRendererHost(command_queue.put, owner)
 
     def run_once(self) -> int:
         handled = 0
