@@ -2034,10 +2034,17 @@ class DSLocalAndVoiceGen:
             except Exception:
                 logger.exception("工具调用切换 Live2D 模型失败")
                 return
+            current_character = self.get_current_character()
             change_char_queue.put({
                 "type": "switch_live2d",
                 "character_name": character_name,
                 "model_json": new_model_json,
+                "character_folder_name": current_character.character_folder_name,
+                "sakiko_state": (
+                    bool(self.sakiko_state)
+                    if current_character.is_sakiko
+                    else None
+                ),
             })
 
         from chat.tool_calling import register_live2d_tools, register_reminder_tool, register_lottery_tool

@@ -5602,6 +5602,11 @@ class ChatGUI(QWidget):
             "character_folder_name": self.current_character.character_folder_name,
             "character_name": character_name,
             "model_json": model_json,
+            "sakiko_state": (
+                bool(self.dp_chat.sakiko_state)
+                if self.current_character.is_sakiko
+                else None
+            ),
         })
 
     def handle_user_input(self) -> None:

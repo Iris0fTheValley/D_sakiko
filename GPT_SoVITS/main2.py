@@ -126,6 +126,54 @@ def resolve_electron_sakiko_model(sakiko_state: bool) -> dict[str, object] | Non
     }
 
 
+def _project_model_path(model_json: str) -> str:
+    """Normalize a project-relative or absolute model path for comparisons."""
+    return os.path.normcase(os.path.normpath(os.path.abspath(os.path.join(script_dir, model_json))))
+
+
+def _is_default_sakiko_model(model_json: str) -> bool:
+    """Return whether a switch points at one of the built-in Sakiko models."""
+    if not model_json:
+        return True
+    return _project_model_path(model_json) in {
+        _project_model_path("../live2d_related/sakiko/live2D_model/3.model.json"),
+        _project_model_path("../live2d_related/sakiko/live2D_model_costume/3.model.json"),
+    }
+
+
+def _build_electron_model_switch(ui_command: dict[str, object]) -> dict[str, object]:
+    """Build one renderer model descriptor without losing Sakiko's active variant."""
+    character_folder = str(ui_command.get("character_folder_name") or "")
+    character_name = str(ui_command.get("character_name") or "")
+    model_json = str(ui_command.get("model_json") or "")
+    sakiko_state = ui_command.get("sakiko_state")
+
+    # Chat switching re-emits the character's default (white) model path.
+    # The behavior state is global and authoritative, so restore the selected
+    # built-in variant when that path is only a default model reference.
+    if (
+        character_folder == "sakiko"
+        and isinstance(sakiko_state, bool)
+        and _is_default_sakiko_model(model_json)
+    ):
+        sakiko_model = resolve_electron_sakiko_model(sakiko_state)
+        if sakiko_model is not None:
+            return sakiko_model
+
+    model_url, model_path = electron_model_url(model_json)
+    if not os.path.isfile(model_path):
+        model_url = str(ui_command.get("model_url") or model_url)
+    descriptor: dict[str, object] = {
+        "model_url": model_url,
+        "character_folder": character_folder,
+        "character_name": character_name,
+        "theme_color": character_theme_color(character_name),
+    }
+    if character_folder == "sakiko" and isinstance(sakiko_state, bool):
+        descriptor["variant"] = "dark" if sakiko_state else "light"
+    return descriptor
+
+
 def electron_renderer_loop() -> None:
     """Feed renderer facts into the shared controller and forward UI requests."""
     global electron_controller
@@ -144,16 +192,7 @@ def electron_renderer_loop() -> None:
             if command_type == "cancel_turn":
                 electron_controller.reset()
             elif command_type == "switch_live2d":
-                model_json = str(ui_command.get("model_json") or "")
-                model_url, model_path = electron_model_url(model_json)
-                if not os.path.isfile(model_path):
-                    model_url = str(ui_command.get("model_url") or model_url)
-                electron_controller.switch_model({
-                    "model_url": model_url,
-                    "character_folder": str(ui_command.get("character_folder_name") or ""),
-                    "character_name": str(ui_command.get("character_name") or ""),
-                    "theme_color": character_theme_color(str(ui_command.get("character_name") or "")),
-                })
+                electron_controller.switch_model(_build_electron_model_switch(ui_command))
             elif command_type == "set_theme_color":
                 try:
                     electron_controller.set_theme_color(str(ui_command.get("theme_color") or ""))
