@@ -1,18 +1,23 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { Application, Ticker } from 'pixi.js'
-import { Live2DStateMachine } from '../statemachine'
+import { Live2DRendererController } from '../renderer-controller'
 
-const props = defineProps<{ modelPath?: string; modelKey?: string }>()
-const emit = defineEmits<{ stateMachineReady: [sm: Live2DStateMachine] }>()
+const props = defineProps<{ modelPath?: string; modelKey?: string; modelToken?: string; rendererId?: string }>()
+const emit = defineEmits<{
+  rendererControllerReady: [controller: Live2DRendererController]
+  rendererFact: [fact: { type: string; event_id?: string; data: Record<string, any> }]
+}>()
 
 const canvasContainer = ref<HTMLDivElement>()
 let app: Application | null = null
-let sm: Live2DStateMachine | null = null
+let controller: Live2DRendererController | null = null
+let resizeObserver: ResizeObserver | null = null
+let resizeFrame: number | null = null
 
 function onCanvasClick(e: MouseEvent) {
-  if (sm && canvasContainer.value) {
-    sm.handleClick(e.clientX, canvasContainer.value.clientWidth)
+  if (controller && canvasContainer.value) {
+    controller.handleClick(e.clientX, canvasContainer.value.clientWidth)
   }
 }
 
@@ -37,51 +42,74 @@ onMounted(async () => {
   })
 
   try {
-    const modelSrc = props.modelPath || '/live2d/sakiko/live2D_model/3.model.json'
+    // The packaged Electron renderer is loaded from file://.  Keep the
+    // bootstrap model relative to dist/renderer so it works before Bridge
+    // sends Python's authoritative load_model command.
+    const modelSrc = props.modelPath || './live2d/sakiko/live2D_model/3.model.json'
     const key = props.modelKey || 'sakiko'
     const live2dModel = await Live2DModel.from(modelSrc, { autoInteract: false })
 
-    // 调整位置和大小
-    live2dModel.scale.set(0.3)
+    // Electron 默认窗口尺寸是 450x600。这个基准必须在换模时保持稳定；
+    // 如果把当前窗口尺寸当作基准，窗口缩小后换模会把模型缩放重置回 0.3。
+    // 窗口尺寸改变和模型重载都通过同一公式计算，确保换模不会改变视觉比例。
+    const baseScale = 0.3
+    const referenceWidth = 450
+    const referenceHeight = 600
+    let lastWidth = 0
+    let lastHeight = 0
+    const applyResize = () => {
+      resizeFrame = null
+      if (!app || !canvasContainer.value) return
+      const width = Math.max(1, canvasContainer.value.clientWidth)
+      const height = Math.max(1, canvasContainer.value.clientHeight)
+      if (width === lastWidth && height === lastHeight) return
+      lastWidth = width
+      lastHeight = height
+      app.renderer.resize(width, height)
+      const ratio = Math.min(width / referenceWidth, height / referenceHeight)
+      live2dModel.scale.set(baseScale * ratio)
+      live2dModel.x = width / 2
+      live2dModel.y = height / 2
+    }
+    const scheduleResize = () => {
+      if (resizeFrame !== null) return
+      resizeFrame = requestAnimationFrame(applyResize)
+    }
     live2dModel.anchor.set(0.5, 0.5)
-    live2dModel.x = app.screen.width / 2
-    live2dModel.y = app.screen.height / 2
+    applyResize()
+    resizeObserver = new ResizeObserver(scheduleResize)
+    resizeObserver.observe(canvasContainer.value!)
     app.stage.addChild(live2dModel)
 
-    // 读取 renderer capability facts；共享行为层据此完成所有选择。
-    let motionFilesByGroup: Record<string, string[]> | undefined
-    let expressionIds: string[] | undefined
-    try {
-      const modelDef = await fetch(modelSrc).then(r => r.json())
-      const motions = modelDef.motions || modelDef.FileReferences?.Motions || {}
-      motionFilesByGroup = {}
-      for (const [group, entries] of Object.entries(motions)) {
-        if (Array.isArray(entries)) {
-          motionFilesByGroup[group] = entries.map((entry: any) => String(entry?.file || entry?.File || ''))
-        }
-      }
-      const expressions = modelDef.expressions || modelDef.FileReferences?.Expressions || []
-      expressionIds = Array.isArray(expressions)
-        ? expressions.map((entry: any) => String(entry?.name || entry?.Name || entry?.file || entry?.File || '').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '')).filter(Boolean)
-        : []
-      console.log('[Live2DStage] Renderer capability catalog loaded')
-    } catch (e) {
-      console.warn('[Live2DStage] Could not read renderer capability catalog:', e)
-    }
-
-    // 创建状态机并启动
-    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key, motionFilesByGroup, expressionIds)
-    sm.start()
-    emit('stateMachineReady', sm)
-    console.log('[Live2DStage] Model loaded, state machine started')
+    // 行为选择由 Python controller 完成；renderer 只执行指定 group/index。
+    controller = new Live2DRendererController(live2dModel, Ticker.shared, key, (fact) => emit('renderer-fact', {
+      ...fact,
+      data: { ...fact.data, model_token: props.modelToken || '' },
+    }), props.rendererId || key, props.modelToken || '')
+    controller.start()
+    emit('rendererControllerReady', controller)
+    console.log('[Live2DStage] Model loaded, renderer controller started')
   } catch (e) {
     console.error('[Live2DStage] Failed to load model:', e)
+    emit('renderer-fact', {
+      type: 'command_failed',
+      data: {
+        command_type: 'load_model',
+        model_token: props.modelToken || '',
+        renderer_id: props.rendererId || props.modelKey || 'electron-renderer',
+        reason: String(e),
+      },
+    })
   }
 })
 
 onUnmounted(() => {
-  sm?.destroy()
-  sm = null
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
+  resizeFrame = null
+  controller?.destroy()
+  controller = null
   app?.destroy(true)
 })
 </script>
@@ -103,5 +131,6 @@ onUnmounted(() => {
 .live2d-container canvas {
   width: 100%;
   height: 100%;
+  display: block;
 }
 </style>

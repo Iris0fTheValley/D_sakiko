@@ -1,21 +1,43 @@
 <script setup lang="ts">
-import { shallowRef, ref, onUnmounted, computed, onMounted, provide } from 'vue'
-import { refDebounced } from '@vueuse/core'
+import { shallowRef, ref, reactive, onUnmounted, computed, onMounted, provide } from 'vue'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
-import type { Live2DStateMachine } from './statemachine'
+import type { Live2DRendererController } from './renderer-controller'
+import type { ProtocolMessage } from './renderer-controller/constants'
+import type { ElectronWindowState } from './composables/electronWindowState'
 
-const stateMachine = shallowRef<Live2DStateMachine | null>(null)
+const rendererController = shallowRef<Live2DRendererController | null>(null)
 const wsConnected = ref(false)
-const textBubble = computed(() => stateMachine.value?.textBubble.value ?? null)
-const userBubble = computed(() => stateMachine.value?.userBubble.value ?? null)
-const isThinking = computed(() => stateMachine.value?.isThinking.value ?? false)
+const textBubble = computed(() => rendererController.value?.textBubble.value ?? null)
+const userBubble = computed(() => rendererController.value?.userBubble.value ?? null)
+const isThinking = computed(() => rendererController.value?.isThinking.value ?? false)
 
 // 模型切换（由 WS 事件驱动）
-const currentCharKey = ref('sakiko')
-// 所有模型统一走 Bridge HTTP，初始默认黑祥
-const customModelPath = ref('http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json')
+const currentCharKey = ref('')
+// 启动时不选择黑祥/白祥；Python controller 会在 renderer hello 后下发模型。
+const customModelPath = ref('')
+const pendingModelToken = ref('')
+const themeColor = ref('#7799CC')
+const windowState = reactive<ElectronWindowState>({
+  cursor: { x: 0, y: 0 },
+  bounds: { x: 0, y: 0, width: 0, height: 0 },
+})
+const nearBorder = computed(() => {
+  const x = windowState.cursor.x - windowState.bounds.x
+  const y = windowState.cursor.y - windowState.bounds.y
+  const threshold = 12
+  const nearWindow = windowState.bounds.width > 0 && windowState.bounds.height > 0
+    && x >= -threshold && x <= windowState.bounds.width + threshold
+    && y >= -threshold && y <= windowState.bounds.height + threshold
+  return nearWindow && (
+    x <= threshold || x >= windowState.bounds.width - threshold
+    || y <= threshold || y >= windowState.bounds.height - threshold
+  )
+})
+const rendererId = sessionStorage.getItem('live2d-renderer-id') || (() => {
+  const id = crypto.randomUUID(); sessionStorage.setItem('live2d-renderer-id', id); return id
+})()
 const stageKey = ref(0)
 
 // ── 悬停淡出（airi fade-on-hover）──
@@ -32,10 +54,9 @@ const isOverModel = computed(() => {
       && mouseY.value < window.innerHeight * (1 - mx)
 })
 const shouldFade = computed(() => fadeOnHoverEnabled.value && isOverModel.value)
+let stopWindowStateListener: (() => void) | null = null
 
-// ── 窗口边框高亮（airi border highlight）──
-const _nearBorder = ref(false)
-const nearBorder = refDebounced(_nearBorder, 250)
+provide('electronWindowState', windowState)
 
 onMounted(() => {
   // 悬停淡出鼠标追踪
@@ -45,39 +66,55 @@ onMounted(() => {
   document.addEventListener('mouseleave', () => { mouseInWindow.value = false })
   document.addEventListener('mouseenter', () => { mouseInWindow.value = true })
 
-  // 边框高亮鼠标追踪
-  setInterval(async () => {
-    try {
-      const pos = await (window as any).electronAPI?.getMousePosition()
-      const bounds = await (window as any).electronAPI?.getWindowBounds()
-      if (!pos || !bounds) return
-      const rx = pos.x - bounds.x
-      const ry = pos.y - bounds.y
-      const t = 10
-      _nearBorder.value = rx >= -t && rx <= bounds.width + t && ry >= -t && ry <= bounds.height + t
-        && (rx <= t || rx >= bounds.width - t || ry <= t || ry >= bounds.height - t)
-    } catch {}
-  }, 200)
+  stopWindowStateListener = window.electronAPI.onWindowState((next) => {
+    windowState.cursor.x = next.cursor.x
+    windowState.cursor.y = next.cursor.y
+    windowState.bounds.x = next.bounds.x
+    windowState.bounds.y = next.bounds.y
+    windowState.bounds.width = next.bounds.width
+    windowState.bounds.height = next.bounds.height
+  })
+  connectWebSocket()
 })
 
 function toggleFadeOnHover() {
   fadeOnHoverEnabled.value = !fadeOnHoverEnabled.value
 }
 
+function setThemeColor(color: unknown) {
+  if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return
+  themeColor.value = color.toUpperCase()
+}
+
 provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
 provide('toggleFadeOnHover', toggleFadeOnHover)
 
-function reloadCustomModel(path: string, charKey?: string) {
-  disconnectWebSocket()
-  stateMachine.value = null
+function reloadCustomModel(path: string, charKey?: string, nextThemeColor?: unknown) {
+  rendererController.value = null
   customModelPath.value = path
   if (charKey) currentCharKey.value = charKey
+  setThemeColor(nextThemeColor)
   stageKey.value++
 }
 
-function onStateMachineReady(sm: Live2DStateMachine) {
-  stateMachine.value = sm
-  connectWebSocket(sm)
+function onRendererControllerReady(controller: Live2DRendererController) {
+  rendererController.value = controller
+  if (ws?.readyState === WebSocket.OPEN) controller.reportReady()
+  else connectWebSocket()
+}
+
+function createProtocolMessage(type: string, data: Record<string, any>): ProtocolMessage {
+  return {
+    v: 1,
+    type,
+    event_id: crypto.randomUUID(),
+    session_id: sessionStorage.getItem('live2d-session-id') || (() => {
+      const id = crypto.randomUUID(); sessionStorage.setItem('live2d-session-id', id); return id
+    })(),
+    source: 'electron-renderer',
+    timestamp: Date.now() / 1000,
+    data,
+  }
 }
 
 // ── WebSocket ──
@@ -85,33 +122,79 @@ let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
 
-function connectWebSocket(sm: Live2DStateMachine) {
+function connectWebSocket() {
+  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return
   if (ws) { try { ws.onopen=null; ws.onclose=null; ws.onerror=null; ws.onmessage=null; ws.close() } catch(_){}; ws=null }
-  try { ws = new WebSocket('ws://localhost:9876') } catch(e) { scheduleReconnect(sm); return }
+  try { ws = new WebSocket('ws://localhost:9876') } catch(e) { scheduleReconnect(); return }
   ws.onopen = () => {
-    wsConnected.value=true; reconnectDelay=1000; console.log('[WS] Connected')
-    sm.setReporter((fact) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ v: 2, ...fact })) })
-    sm.reset()
+      wsConnected.value = true
+      reconnectDelay = 1000
+      ws?.send(JSON.stringify(createProtocolMessage('renderer_hello', {
+      capabilities: ['motion', 'audio', 'lipsync', 'snapshot'],
+      model_key: currentCharKey.value,
+      model_token: pendingModelToken.value,
+      renderer_id: rendererId,
+    })))
+    rendererController.value?.reportReady()
   }
   ws.onmessage = (event) => {
     try {
-      const msg = JSON.parse(event.data)
-      // switch_live2d: 切换角色或模型（后端总是发送 model_url + character_folder）
-      if (msg.type === 'switch_live2d' && msg.data?.model_url) {
-        reloadCustomModel(msg.data.model_url, msg.data.character_folder)
+      const msg = JSON.parse(event.data) as Partial<ProtocolMessage> & { data?: any }
+      if (msg.type === 'live2d_command') {
+        const command = msg.data?.command || msg.data
+        const targets = command?.data?.target_renderer_ids
+        const target = command?.data?.target_renderer_id
+        if ((Array.isArray(targets) && targets.length > 0 && !targets.includes(rendererId))
+          || (target && target !== rendererId)) return
+        if (command?.type === 'load_model' && command.data?.model?.model_url) {
+          pendingModelToken.value = String(command.data.token || '')
+          reloadCustomModel(
+            command.data.model.model_url,
+            command.data.model.character_folder,
+            command.data.model.theme_color,
+          )
+          return
+        }
+        if (command?.type === 'set_theme_color') {
+          setThemeColor(command.data?.theme_color)
+          return
+        }
+        if (command?.type) rendererController.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
         return
       }
-      const command = msg.type === 'live2d_command' ? msg.data?.command : { type: msg.type, data: msg.data }
-      sm.pushCommand(command)
+      if (msg.type === 'model_switch' && msg.data?.model_url) {
+        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.theme_color)
+        return
+      }
+      if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
+        for (const command of msg.data.commands) {
+          if (command?.type) rendererController.value?.pushCommand(command)
+        }
+      }
     } catch(e) { console.warn('[WS] Parse:', e) }
   }
-  ws.onclose = () => { wsConnected.value=false; scheduleReconnect(sm) }
+  ws.onclose = () => {
+    wsConnected.value = false
+    ws = null
+    rendererController.value?.abortTransportPlayback()
+    scheduleReconnect()
+  }
   ws.onerror = () => { ws?.close() }
 }
 
-function scheduleReconnect(sm: Live2DStateMachine) {
+function onRendererFact(fact: { type: string; event_id?: string; data: Record<string, any> }) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return
+  const message = createProtocolMessage(fact.type, fact.data)
+  ws.send(JSON.stringify(message))
+}
+
+provide('sendRendererIntent', (intent: string) => {
+  onRendererFact({ type: 'renderer_intent', data: { intent } })
+})
+
+function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer)
-  reconnectTimer = setTimeout(() => { reconnectDelay = Math.min(reconnectDelay*2, 30000); connectWebSocket(sm) }, reconnectDelay)
+  reconnectTimer = setTimeout(() => { reconnectDelay = Math.min(reconnectDelay*2, 30000); connectWebSocket() }, reconnectDelay)
 }
 
 function disconnectWebSocket() {
@@ -119,13 +202,17 @@ function disconnectWebSocket() {
   if (ws) { ws.onopen=null; ws.onclose=null; ws.onerror=null; ws.onmessage=null; try{ws.close()}catch(_){}; ws=null }
 }
 
-onUnmounted(() => disconnectWebSocket())
+onUnmounted(() => {
+  disconnectWebSocket()
+  stopWindowStateListener?.()
+  stopWindowStateListener = null
+})
 </script>
 
 <template>
   <div class="app-root">
     <div class="stage-area" :class="{ 'pointer-events-none': fadeOnHoverEnabled }" :style="{ transition: 'opacity 0.25s ease-in-out', opacity: shouldFade ? 0 : 1 }">
-      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" @state-machine-ready="onStateMachineReady" />
+      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :renderer-id="rendererId" @renderer-controller-ready="onRendererControllerReady" @renderer-fact="onRendererFact" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
     <Transition name="fade"><div v-if="userBubble" class="text-bubble user">{{ userBubble }}</div></Transition>
@@ -133,13 +220,21 @@ onUnmounted(() => disconnectWebSocket())
     <ResizeHandler />
     <ControlsIsland />
 
-    <!-- 窗口边框高亮 -->
-    <div v-if="nearBorder" class="border-highlight"></div>
+    <div
+      class="window-edge-highlight"
+      :class="{ 'is-visible': nearBorder }"
+      :style="{ '--window-theme-color': themeColor }"
+      aria-hidden="true"
+    />
   </div>
 </template>
 
 <style scoped>
-.app-root { width:100%; height:100%; position:relative; overflow:hidden; background:transparent; }
+.app-root {
+  --window-radius: 16px;
+  --window-edge-inset: 3px;
+  width:100%; height:100%; position:relative; overflow:hidden; background:transparent;
+}
 .stage-area { width:100%; height:100%; position:absolute; top:0; left:0; }
 .text-bubble { position:absolute; padding:.5rem 1rem; max-width:80%; text-align:center; font-size:16px; border-radius:.75rem; background:rgba(38,38,38,.8); color:#d4d4d4; pointer-events:none; }
 .text-bubble.character { bottom:4rem; left:50%; transform:translateX(-50%); }
@@ -148,25 +243,61 @@ onUnmounted(() => disconnectWebSocket())
 .fade-enter-active,.fade-leave-active { transition:opacity .3s ease; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
 
-</style>
-
-<style>
-/* unscoped：Vue scoped 会 hash @keyframes 名，导致 inline style / class 引用不到 */
-.border-highlight {
+.window-edge-highlight {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: var(--window-edge-inset);
   z-index: 9999;
+  box-sizing: border-box;
   pointer-events: none;
-  border: 4px solid rgba(59, 130, 246, 0.5);
-  border-radius: 1rem;
-  animation: border-pulse 2s infinite;
+  border: 2px solid var(--window-theme-color);
+  border-radius: var(--window-radius);
+  clip-path: inset(0 round var(--window-radius));
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 280ms ease, visibility 0s linear 280ms,
+    border-color 700ms ease;
 }
-
-@keyframes border-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+.window-edge-highlight::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border: 1px solid color-mix(in srgb, var(--window-theme-color) 28%, white 72%);
+  border-radius: calc(var(--window-radius) - 1px);
+  opacity: .42;
+  pointer-events: none;
+}
+.window-edge-highlight::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--window-theme-color) 45%, transparent);
+  border-radius: inherit;
+  box-shadow: 0 0 9px 1px color-mix(in srgb, var(--window-theme-color) 22%, transparent);
+  opacity: .3;
+  pointer-events: none;
+}
+.window-edge-highlight.is-visible {
+  opacity: 0.7;
+  visibility: visible;
+}
+.window-edge-highlight.is-visible::after {
+  animation: window-edge-glow-breathe 3.8s ease-in-out infinite;
+}
+@keyframes window-edge-glow-breathe {
+  0%, 100% {
+    opacity: 0.24;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .window-edge-highlight.is-visible {
+    animation: none;
+  }
+  .window-edge-highlight.is-visible::after {
+    animation: none;
+    opacity: .3;
+  }
 }
 </style>
