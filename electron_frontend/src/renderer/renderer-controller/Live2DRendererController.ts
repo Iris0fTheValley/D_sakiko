@@ -151,9 +151,13 @@ export class Live2DRendererController {
     const index = Number(data.index)
     const priority = Number(data.priority ?? 1)
     const token = String(data.motion_token || command.event_id || '')
-    if (!group || !Number.isInteger(index) || index < 0) {
-      this.report({ type: 'command_failed', event_id: command.event_id, data: { reason: 'invalid_motion' } })
+    if (!group || !Number.isInteger(index) || index < 0 || !token) {
+      this.report({ type: 'command_failed', event_id: command.event_id, data: { token, phase: 'motion_start', reason: 'invalid_motion' } })
       return
+    }
+    const expressionId = String(data.expression_id || '')
+    if (expressionId) {
+      try { this.model.expression(expressionId) } catch (_) { /* renderer best effort only */ }
     }
     this.eyeTransitionActive = false
     this.stopMotion()
@@ -170,14 +174,14 @@ export class Live2DRendererController {
       if (this.activeMotionToken !== token) return
       if (!started) {
         this.activeMotionToken = ''
-        this.report({ type: 'command_failed', event_id: command.event_id, data: { reason: 'motion_not_started', group, index } })
+        this.report({ type: 'command_failed', event_id: command.event_id, data: { token, phase: 'motion_start', reason: 'motion_not_started', group, index } })
         return
       }
         this.report({ type: 'motion_started', event_id: command.event_id, data: { token, turn_id: data.turn_id || '', segment_id: data.segment_id || '', group, index, renderer_id: this.rendererId } })
     }).catch((error) => {
       if (this.activeMotionToken !== token) return
       this.activeMotionToken = ''
-      this.report({ type: 'command_failed', event_id: command.event_id, data: { reason: String(error) } })
+      this.report({ type: 'command_failed', event_id: command.event_id, data: { token, phase: 'motion_start', reason: String(error) } })
     })
   }
 
@@ -278,8 +282,12 @@ export class Live2DRendererController {
       internal?.setAutoBreathEnable?.(true)
       const definitions = internal?.motionManager?.definitions || {}
       const motionGroups: Record<string, number> = {}
+      const motionFilesByGroup: Record<string, string[]> = {}
       for (const [group, entries] of Object.entries(definitions)) {
-        if (Array.isArray(entries)) motionGroups[group] = entries.length
+        if (Array.isArray(entries)) {
+          motionGroups[group] = entries.length
+          motionFilesByGroup[group] = entries.map((entry: any) => String(entry?.file || entry?.File || ''))
+        }
       }
       const expressionDefinitions = (internal?.motionManager?.expressionManager?.definitions || []) as any[]
       const expressionIds = expressionDefinitions
@@ -291,6 +299,7 @@ export class Live2DRendererController {
         model_token: this.modelToken,
         capabilities: { motion: true, audio: true, lipsync: true },
         motion_groups: motionGroups,
+        motion_files_by_group: motionFilesByGroup,
         expression_ids: expressionIds,
       }
     } catch (_) { /* optional SDK features */ }
