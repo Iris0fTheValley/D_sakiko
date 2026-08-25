@@ -6,6 +6,22 @@ app.commandLine.appendSwitch('enable-webgl')
 app.commandLine.appendSwitch('ignore-gpu-blacklist')
 
 let mainWindow: BrowserWindow | null = null
+let windowStateTimer: ReturnType<typeof setInterval> | null = null
+let lastWindowState = ''
+
+function publishWindowState(force = false) {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+  const bounds = mainWindow.getBounds()
+  const cursor = screen.getCursorScreenPoint()
+  const state = {
+    cursor: { x: cursor.x, y: cursor.y },
+    bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+  }
+  const serialized = JSON.stringify(state)
+  if (!force && serialized === lastWindowState) return
+  lastWindowState = serialized
+  mainWindow.webContents.send('window-state', state)
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -28,6 +44,15 @@ function createWindow() {
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   mainWindow.setFullScreenable(false)
   mainWindow.on('ready-to-show', () => mainWindow!.show())
+  mainWindow.on('ready-to-show', publishWindowState)
+  mainWindow.on('move', publishWindowState)
+  mainWindow.on('resize', publishWindowState)
+  mainWindow.on('closed', () => {
+    if (windowStateTimer) clearInterval(windowStateTimer)
+    windowStateTimer = null
+    mainWindow = null
+    lastWindowState = ''
+  })
 
   let allowClose = false
   mainWindow.on('close', (event) => {
@@ -43,6 +68,13 @@ function createWindow() {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  ipcMain.on('window-state-ready', () => publishWindowState(true))
+
+  // Cursor coordinates are only available in the main process while the
+  // transparent window is click-through. Publish one shared snapshot so the
+  // renderer never performs hover-time IPC round trips.
+  windowStateTimer = setInterval(publishWindowState, 16)
 
   // Resize
   ipcMain.handle('resize-window', (_e, { deltaX, deltaY, direction }) => {
@@ -67,16 +99,6 @@ function createWindow() {
   // 鼠标穿透
   ipcMain.handle('set-ignore-mouse-events', (_e, ignore, options) => {
     mainWindow?.setIgnoreMouseEvents(ignore, options)
-  })
-
-  // 获取鼠标屏幕坐标（穿透模式下 renderer 收不到 mousemove）
-  ipcMain.handle('get-mouse-position', () => {
-    const p = screen.getCursorScreenPoint()
-    return { x: p.x, y: p.y }
-  })
-
-  ipcMain.handle('get-window-bounds', () => {
-    return mainWindow?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 }
   })
 
   // 置顶

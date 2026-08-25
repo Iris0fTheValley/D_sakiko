@@ -31,8 +31,8 @@ export interface RendererFact {
   data: Record<string, any>
 }
 
-/** Compatibility type for text-only callers; it contains no behavior policy. */
-export interface StateMachineEvent {
+/** Text-only renderer event; it contains no behavior policy. */
+export interface RendererControllerEvent {
   type: string
   data: Record<string, any>
 }

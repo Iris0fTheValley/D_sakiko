@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { shallowRef, ref, onUnmounted, computed, onMounted, provide } from 'vue'
+import { shallowRef, ref, reactive, onUnmounted, computed, onMounted, provide } from 'vue'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
-import type { Live2DStateMachine } from './statemachine'
-import type { ProtocolMessage } from './statemachine/constants'
+import type { Live2DRendererController } from './renderer-controller'
+import type { ProtocolMessage } from './renderer-controller/constants'
+import type { ElectronWindowState } from './composables/electronWindowState'
 
-const stateMachine = shallowRef<Live2DStateMachine | null>(null)
+const rendererController = shallowRef<Live2DRendererController | null>(null)
 const wsConnected = ref(false)
-const textBubble = computed(() => stateMachine.value?.textBubble.value ?? null)
-const userBubble = computed(() => stateMachine.value?.userBubble.value ?? null)
-const isThinking = computed(() => stateMachine.value?.isThinking.value ?? false)
+const textBubble = computed(() => rendererController.value?.textBubble.value ?? null)
+const userBubble = computed(() => rendererController.value?.userBubble.value ?? null)
+const isThinking = computed(() => rendererController.value?.isThinking.value ?? false)
 
 // 模型切换（由 WS 事件驱动）
 const currentCharKey = ref('sakiko')
@@ -19,8 +20,22 @@ const customModelPath = ref('http://127.0.0.1:9877/model/sakiko/live2D_model_cos
 const pendingModelToken = ref('')
 const initialExpression = ref('serious')
 const themeColor = ref('#7799CC')
-const nearBorder = ref(false)
-let borderPollTimer: ReturnType<typeof setInterval> | null = null
+const windowState = reactive<ElectronWindowState>({
+  cursor: { x: 0, y: 0 },
+  bounds: { x: 0, y: 0, width: 0, height: 0 },
+})
+const nearBorder = computed(() => {
+  const x = windowState.cursor.x - windowState.bounds.x
+  const y = windowState.cursor.y - windowState.bounds.y
+  const threshold = 12
+  const nearWindow = windowState.bounds.width > 0 && windowState.bounds.height > 0
+    && x >= -threshold && x <= windowState.bounds.width + threshold
+    && y >= -threshold && y <= windowState.bounds.height + threshold
+  return nearWindow && (
+    x <= threshold || x >= windowState.bounds.width - threshold
+    || y <= threshold || y >= windowState.bounds.height - threshold
+  )
+})
 const rendererId = sessionStorage.getItem('live2d-renderer-id') || (() => {
   const id = crypto.randomUUID(); sessionStorage.setItem('live2d-renderer-id', id); return id
 })()
@@ -40,6 +55,9 @@ const isOverModel = computed(() => {
       && mouseY.value < window.innerHeight * (1 - mx)
 })
 const shouldFade = computed(() => fadeOnHoverEnabled.value && isOverModel.value)
+let stopWindowStateListener: (() => void) | null = null
+
+provide('electronWindowState', windowState)
 
 onMounted(() => {
   // 悬停淡出鼠标追踪
@@ -49,27 +67,14 @@ onMounted(() => {
   document.addEventListener('mouseleave', () => { mouseInWindow.value = false })
   document.addEventListener('mouseenter', () => { mouseInWindow.value = true })
 
-  // Reuse the donor/AIRI edge detection. Screen-coordinate polling continues
-  // to work while mouse-through is enabled, when renderer mouse events stop.
-  borderPollTimer = setInterval(async () => {
-    try {
-      const [pos, bounds] = await Promise.all([
-        window.electronAPI.getMousePosition(),
-        window.electronAPI.getWindowBounds(),
-      ])
-      const x = pos.x - bounds.x
-      const y = pos.y - bounds.y
-      const threshold = 10
-      const nearWindow = x >= -threshold && x <= bounds.width + threshold
-        && y >= -threshold && y <= bounds.height + threshold
-      nearBorder.value = nearWindow && (
-        x <= threshold || x >= bounds.width - threshold
-        || y <= threshold || y >= bounds.height - threshold
-      )
-    } catch {
-      nearBorder.value = false
-    }
-  }, 100)
+  stopWindowStateListener = window.electronAPI.onWindowState((next) => {
+    windowState.cursor.x = next.cursor.x
+    windowState.cursor.y = next.cursor.y
+    windowState.bounds.x = next.bounds.x
+    windowState.bounds.y = next.bounds.y
+    windowState.bounds.width = next.bounds.width
+    windowState.bounds.height = next.bounds.height
+  })
 })
 
 function toggleFadeOnHover() {
@@ -85,7 +90,7 @@ provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
 provide('toggleFadeOnHover', toggleFadeOnHover)
 
 function reloadCustomModel(path: string, charKey?: string, expression?: string, nextThemeColor?: unknown) {
-  stateMachine.value = null
+  rendererController.value = null
   customModelPath.value = path
   if (charKey) currentCharKey.value = charKey
   if (expression) initialExpression.value = expression
@@ -93,9 +98,9 @@ function reloadCustomModel(path: string, charKey?: string, expression?: string, 
   stageKey.value++
 }
 
-function onStateMachineReady(sm: Live2DStateMachine) {
-  stateMachine.value = sm
-  if (ws?.readyState === WebSocket.OPEN) sm.reportReady()
+function onRendererControllerReady(controller: Live2DRendererController) {
+  rendererController.value = controller
+  if (ws?.readyState === WebSocket.OPEN) controller.reportReady()
   else connectWebSocket()
 }
 
@@ -125,14 +130,14 @@ function connectWebSocket() {
   ws.onopen = () => {
     wsConnected.value = true
     reconnectDelay = 1000
-    stateMachine.value?.reset()
+    rendererController.value?.reset()
     ws?.send(JSON.stringify(createProtocolMessage('renderer_hello', {
       capabilities: ['motion', 'audio', 'lipsync', 'snapshot'],
       model_key: currentCharKey.value,
       model_token: pendingModelToken.value,
       renderer_id: rendererId,
     })))
-    stateMachine.value?.reportReady()
+    rendererController.value?.reportReady()
   }
   ws.onmessage = (event) => {
     try {
@@ -161,7 +166,7 @@ function connectWebSocket() {
           setThemeColor(command.data?.theme_color)
           return
         }
-        if (command?.type) stateMachine.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
+        if (command?.type) rendererController.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
         return
       }
       if (msg.type === 'model_switch' && msg.data?.model_url) {
@@ -170,7 +175,7 @@ function connectWebSocket() {
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
         for (const command of msg.data.commands) {
-          if (command?.type) stateMachine.value?.pushCommand(command)
+          if (command?.type) rendererController.value?.pushCommand(command)
         }
       }
     } catch(e) { console.warn('[WS] Parse:', e) }
@@ -201,15 +206,15 @@ function disconnectWebSocket() {
 
 onUnmounted(() => {
   disconnectWebSocket()
-  if (borderPollTimer) clearInterval(borderPollTimer)
-  borderPollTimer = null
+  stopWindowStateListener?.()
+  stopWindowStateListener = null
 })
 </script>
 
 <template>
   <div class="app-root">
     <div class="stage-area" :class="{ 'pointer-events-none': fadeOnHoverEnabled }" :style="{ transition: 'opacity 0.25s ease-in-out', opacity: shouldFade ? 0 : 1 }">
-      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :initial-expression="initialExpression" :renderer-id="rendererId" @state-machine-ready="onStateMachineReady" @renderer-fact="onRendererFact" />
+      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :initial-expression="initialExpression" :renderer-id="rendererId" @renderer-controller-ready="onRendererControllerReady" @renderer-fact="onRendererFact" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
     <Transition name="fade"><div v-if="userBubble" class="text-bubble user">{{ userBubble }}</div></Transition>
@@ -227,7 +232,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.app-root { width:100%; height:100%; position:relative; overflow:hidden; background:transparent; }
+.app-root {
+  --window-radius: 16px;
+  --window-edge-inset: 3px;
+  width:100%; height:100%; position:relative; overflow:hidden; background:transparent;
+}
 .stage-area { width:100%; height:100%; position:absolute; top:0; left:0; }
 .text-bubble { position:absolute; padding:.5rem 1rem; max-width:80%; text-align:center; font-size:16px; border-radius:.75rem; background:rgba(38,38,38,.8); color:#d4d4d4; pointer-events:none; }
 .text-bubble.character { bottom:4rem; left:50%; transform:translateX(-50%); }
@@ -238,35 +247,59 @@ onUnmounted(() => {
 
 .window-edge-highlight {
   position: fixed;
-  inset: 0;
+  inset: var(--window-edge-inset);
   z-index: 9999;
   box-sizing: border-box;
   pointer-events: none;
-  border: 1px solid var(--window-theme-color);
-  border-radius: 12px;
+  border: 2px solid var(--window-theme-color);
+  border-radius: var(--window-radius);
+  clip-path: inset(0 round var(--window-radius));
   opacity: 0;
   visibility: hidden;
   transition: opacity 280ms ease, visibility 0s linear 280ms,
-    border-color 700ms ease, box-shadow 700ms ease;
+    border-color 700ms ease;
+}
+.window-edge-highlight::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border: 1px solid color-mix(in srgb, var(--window-theme-color) 28%, white 72%);
+  border-radius: calc(var(--window-radius) - 1px);
+  opacity: .42;
+  pointer-events: none;
+}
+.window-edge-highlight::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--window-theme-color) 45%, transparent);
+  border-radius: inherit;
+  box-shadow: 0 0 9px 1px color-mix(in srgb, var(--window-theme-color) 22%, transparent);
+  opacity: .3;
+  pointer-events: none;
 }
 .window-edge-highlight.is-visible {
-  opacity: 0.68;
+  opacity: 0.7;
   visibility: visible;
-  animation: window-edge-breathe 3.6s ease-in-out infinite;
 }
-@keyframes window-edge-breathe {
+.window-edge-highlight.is-visible::after {
+  animation: window-edge-glow-breathe 3.8s ease-in-out infinite;
+}
+@keyframes window-edge-glow-breathe {
   0%, 100% {
-    opacity: 0.52;
-    box-shadow: 0 0 4px color-mix(in srgb, var(--window-theme-color) 22%, transparent);
+    opacity: 0.24;
   }
   50% {
-    opacity: 0.78;
-    box-shadow: 0 0 7px color-mix(in srgb, var(--window-theme-color) 32%, transparent);
+    opacity: 0.42;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .window-edge-highlight.is-visible {
     animation: none;
+  }
+  .window-edge-highlight.is-visible::after {
+    animation: none;
+    opacity: .3;
   }
 }
 </style>

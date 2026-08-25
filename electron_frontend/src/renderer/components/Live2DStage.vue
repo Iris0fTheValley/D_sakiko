@@ -1,22 +1,23 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { Application, Ticker } from 'pixi.js'
-import { Live2DStateMachine } from '../statemachine'
+import { Live2DRendererController } from '../renderer-controller'
 
 const props = defineProps<{ modelPath?: string; modelKey?: string; modelToken?: string; initialExpression?: string; rendererId?: string }>()
 const emit = defineEmits<{
-  stateMachineReady: [sm: Live2DStateMachine]
+  rendererControllerReady: [controller: Live2DRendererController]
   rendererFact: [fact: { type: string; event_id?: string; data: Record<string, any> }]
 }>()
 
 const canvasContainer = ref<HTMLDivElement>()
 let app: Application | null = null
-let sm: Live2DStateMachine | null = null
+let controller: Live2DRendererController | null = null
 let resizeObserver: ResizeObserver | null = null
+let resizeFrame: number | null = null
 
 function onCanvasClick(e: MouseEvent) {
-  if (sm && canvasContainer.value) {
-    sm.handleClick(e.clientX, canvasContainer.value.clientWidth)
+  if (controller && canvasContainer.value) {
+    controller.handleClick(e.clientX, canvasContainer.value.clientWidth)
   }
 }
 
@@ -51,19 +52,29 @@ onMounted(async () => {
     const baseScale = 0.3
     const referenceWidth = 450
     const referenceHeight = 600
-    const resizeModel = () => {
+    let lastWidth = 0
+    let lastHeight = 0
+    const applyResize = () => {
+      resizeFrame = null
       if (!app || !canvasContainer.value) return
       const width = Math.max(1, canvasContainer.value.clientWidth)
       const height = Math.max(1, canvasContainer.value.clientHeight)
+      if (width === lastWidth && height === lastHeight) return
+      lastWidth = width
+      lastHeight = height
       app.renderer.resize(width, height)
       const ratio = Math.min(width / referenceWidth, height / referenceHeight)
       live2dModel.scale.set(baseScale * ratio)
       live2dModel.x = width / 2
       live2dModel.y = height / 2
     }
+    const scheduleResize = () => {
+      if (resizeFrame !== null) return
+      resizeFrame = requestAnimationFrame(applyResize)
+    }
     live2dModel.anchor.set(0.5, 0.5)
-    resizeModel()
-    resizeObserver = new ResizeObserver(resizeModel)
+    applyResize()
+    resizeObserver = new ResizeObserver(scheduleResize)
     resizeObserver.observe(canvasContainer.value!)
     app.stage.addChild(live2dModel)
 
@@ -74,13 +85,13 @@ onMounted(async () => {
     } catch (_e) { /* expression not supported */ }
 
     // 行为选择由 Python controller 完成；renderer 只执行指定 group/index。
-    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key, (fact) => emit('renderer-fact', {
+    controller = new Live2DRendererController(live2dModel, Ticker.shared, key, (fact) => emit('renderer-fact', {
       ...fact,
       data: { ...fact.data, model_token: props.modelToken || '' },
     }), props.rendererId || key, props.modelToken || '')
-    sm.start()
-    emit('stateMachineReady', sm)
-    console.log('[Live2DStage] Model loaded, state machine started')
+    controller.start()
+    emit('rendererControllerReady', controller)
+    console.log('[Live2DStage] Model loaded, renderer controller started')
   } catch (e) {
     console.error('[Live2DStage] Failed to load model:', e)
     emit('renderer-fact', {
@@ -98,8 +109,10 @@ onMounted(async () => {
 onUnmounted(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
-  sm?.destroy()
-  sm = null
+  if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
+  resizeFrame = null
+  controller?.destroy()
+  controller = null
   app?.destroy(true)
 })
 </script>

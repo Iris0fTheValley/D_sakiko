@@ -138,7 +138,7 @@ if (-not $WhatIf) {
         'bridge\protocol.py',
         'bridge\saki_bridge.py',
         'electron_frontend\package.json',
-        'electron_frontend\src\renderer\statemachine\Live2DStateMachine.ts'
+        'electron_frontend\src\renderer\renderer-controller\Live2DRendererController.ts'
     )
 
     Write-Host ''

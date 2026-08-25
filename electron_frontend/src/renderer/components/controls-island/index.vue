@@ -4,13 +4,12 @@ import { computed, reactive, ref, watch, inject } from 'vue'
 
 import ControlButtonTooltip from './control-button-tooltip.vue'
 import ControlButton from './control-button.vue'
+import type { ElectronWindowState } from '../../composables/electronWindowState'
 
 declare const electronAPI: {
   toggleDevTools: () => Promise<boolean>
   toggleAlwaysOnTop: () => Promise<boolean>
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
-  getMousePosition: () => Promise<{ x: number, y: number }>
-  getWindowBounds: () => Promise<{ x: number, y: number, width: number, height: number }>
 }
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -84,36 +83,53 @@ async function toggleAlwaysOnTop() {
 const fadeOnHover = inject<ReturnType<typeof ref<boolean>>>('fadeOnHoverEnabled', ref(false))
 const toggleFadeOnHover = inject<() => void>('toggleFadeOnHover', () => {})
 const sendRendererIntent = inject<(intent: string) => void>('sendRendererIntent', () => {})
+const windowState = inject<ElectronWindowState>('electronWindowState', reactive({
+  cursor: { x: 0, y: 0 },
+  bounds: { x: 0, y: 0, width: 0, height: 0 },
+}))
 const isVoiceRecording = ref(false)
 
 // ── 鼠标穿透（照搬 airi 逻辑）──
 // fadeOnHover ON + 鼠标在面板外 → 穿透；鼠标在面板内或面板展开 → 不穿透
-let _pollTimer: ReturnType<typeof setInterval> | null = null
 const _cursorInsideIsland = ref(false)
 const isOutsideFor250Ms = refDebounced(computed(() => !_cursorInsideIsland.value || isOutside.value), 250)
+const isOverResizeHandle = computed(() => {
+  const x = windowState.cursor.x - windowState.bounds.x
+  const y = windowState.cursor.y - windowState.bounds.y
+  const edge = 12
+  return windowState.bounds.width > 0 && windowState.bounds.height > 0
+    && x >= 0 && x <= windowState.bounds.width
+    && y >= 0 && y <= windowState.bounds.height
+    && (x <= edge || x >= windowState.bounds.width - edge
+      || y <= edge || y >= windowState.bounds.height - edge)
+})
+
+function updateCursorInsideIsland() {
+  const el = islandRef.value
+  if (!el || windowState.bounds.width <= 0 || windowState.bounds.height <= 0) return
+  const rect = el.getBoundingClientRect()
+  _cursorInsideIsland.value = windowState.cursor.x >= windowState.bounds.x + rect.left
+    && windowState.cursor.x <= windowState.bounds.x + rect.right
+    && windowState.cursor.y >= windowState.bounds.y + rect.top
+    && windowState.cursor.y <= windowState.bounds.y + rect.bottom
+}
+
+watch(
+  () => [windowState.cursor.x, windowState.cursor.y, windowState.bounds.x, windowState.bounds.y,
+    windowState.bounds.width, windowState.bounds.height],
+  updateCursorInsideIsland,
+  { immediate: true },
+)
 
 async function syncPenetrate() {
-  const on = !!fadeOnHover.value && !expanded.value && isOutsideFor250Ms.value
+  const on = !!fadeOnHover.value && !expanded.value && isOutsideFor250Ms.value && !isOverResizeHandle.value
   try { await electronAPI.setIgnoreMouseEvents(on, { forward: true }) } catch {}
 }
 
-watch([fadeOnHover, expanded, isOutsideFor250Ms], syncPenetrate)
+watch([fadeOnHover, expanded, isOutsideFor250Ms, isOverResizeHandle], syncPenetrate)
 
-// IPC 轮询鼠标位置（穿透后 renderer mousemove 不触发）
 watch(fadeOnHover, (on) => {
-  if (on) {
-    _pollTimer = setInterval(async () => {
-      try {
-        const [pos, bounds] = await Promise.all([electronAPI.getMousePosition(), electronAPI.getWindowBounds()])
-        const el = islandRef.value
-        if (!el || !bounds) return
-        const r = el.getBoundingClientRect()
-        _cursorInsideIsland.value = pos.x >= bounds.x + r.left && pos.x <= bounds.x + r.right
-                                 && pos.y >= bounds.y + r.top && pos.y <= bounds.y + r.bottom
-      } catch {}
-    }, 150)
-  } else {
-    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
+  if (!on) {
     // 关闭时确保恢复交互
     electronAPI.setIgnoreMouseEvents(false, { forward: true })
   }

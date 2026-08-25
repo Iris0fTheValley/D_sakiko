@@ -11,7 +11,7 @@ export type RendererFactHandler = (fact: RendererFact) => void
  * belong to the Python Live2DBehaviorController. This class owns SDK, audio
  * and DOM state and reports lifecycle facts back to that controller.
  */
-export class Live2DStateMachine {
+export class Live2DRendererController {
   readonly textBubble: Ref<string | null> = ref(null)
   readonly userBubble: Ref<string | null> = ref(null)
   readonly isThinking: Ref<boolean> = ref(false)

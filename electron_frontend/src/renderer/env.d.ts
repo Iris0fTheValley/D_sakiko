@@ -10,8 +10,10 @@ interface ElectronAPI {
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
   toggleAlwaysOnTop: () => Promise<boolean>
   startDraggingWindow: () => Promise<void>
-  getMousePosition: () => Promise<{ x: number; y: number }>
-  getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
+  onWindowState: (listener: (state: {
+    cursor: { x: number; y: number }
+    bounds: { x: number; y: number; width: number; height: number }
+  }) => void) => () => void
   closeWindow: () => Promise<void>
 }
 

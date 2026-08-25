@@ -10,11 +10,15 @@ const api = {
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) =>
     ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
 
-  getMousePosition: () =>
-    ipcRenderer.invoke('get-mouse-position'),
-
-  getWindowBounds: () =>
-    ipcRenderer.invoke('get-window-bounds'),
+  onWindowState: (listener: (state: {
+    cursor: { x: number; y: number }
+    bounds: { x: number; y: number; width: number; height: number }
+  }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+    ipcRenderer.on('window-state', handler)
+    ipcRenderer.send('window-state-ready')
+    return () => ipcRenderer.removeListener('window-state', handler)
+  },
 
   toggleAlwaysOnTop: () =>
     ipcRenderer.invoke('toggle-always-on-top'),
