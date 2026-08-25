@@ -4,7 +4,6 @@ import contextlib
 import math
 import re
 import time
-import wave
 from random import random
 from live2d.utils.lipsync import WavHandler
 import glob, os, sys
@@ -41,6 +40,7 @@ from live2d_support.shared_segment_executor import PygameSharedSegmentExecutor
 from live2d_support.shared_segment_executor import PygameScheduledMotionExecutor
 from live2d_support.segment_lifecycle import SharedSegmentLifecycle
 from live2d_support.behavior_scheduler import SharedBehaviorScheduler
+from live2d_support.audio_duration import read_audio_duration_seconds
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -331,20 +331,7 @@ class Live2DModule:
         self.long_audio_motion_repeat_count = 0
 
     def _get_audio_duration_seconds(self, audio_file_path: str) -> float:
-        if not audio_file_path or not os.path.isfile(audio_file_path):
-            return 0.0
-        try:
-            with wave.open(audio_file_path, "rb") as audio_file:
-                frame_rate = audio_file.getframerate()
-                if frame_rate <= 0:
-                    return 0.0
-                return audio_file.getnframes() / frame_rate
-        except Exception:
-            pass
-        try:
-            return float(pygame.mixer.Sound(audio_file_path).get_length())
-        except Exception:
-            return 0.0
+        return read_audio_duration_seconds(audio_file_path)
 
     def _prepare_long_audio_motion_loop(self, motion_group: str, audio_file_path: str):
         duration = self._get_audio_duration_seconds(audio_file_path)

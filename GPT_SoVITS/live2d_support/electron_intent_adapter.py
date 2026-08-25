@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from queue import Empty
+from live2d_support.audio_duration import read_audio_duration_seconds
 
 
 class ElectronIntentAdapter:
@@ -22,6 +23,6 @@ class ElectronIntentAdapter:
         self._sequence += 1
         self._intents.put({
             "type": "emotion_segment",
-            "data": {"turn_id": "electron", "segment_id": str(self._sequence), "emotion": str(emotion), "audio_path": str(audio_path)},
+            "data": {"turn_id": "electron", "segment_id": str(self._sequence), "emotion": str(emotion), "audio_path": str(audio_path), "audio_duration_seconds": read_audio_duration_seconds(str(audio_path))},
         })
         return True
