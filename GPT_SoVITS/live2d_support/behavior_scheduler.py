@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from random import Random
 from typing import Callable, Iterable, Mapping
 
-from live2d_support.expression_policy import select_expression_for_motion
+from live2d_support.expression_policy import select_expression_for_motion, semantic_expression_candidates, select_supported_expression
 
 
 @dataclass(frozen=True)
@@ -161,6 +161,9 @@ class SharedBehaviorScheduler:
     def request_motion(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
         """Resolve an explicit upstream intent without renderer-side selection."""
         return self._exact(group, priority, purpose)
+
+    def resolve_semantic_expression(self, semantic_name: str) -> str | None:
+        return select_supported_expression(semantic_expression_candidates(semantic_name) or (), self._expression_ids)
 
     def _exact(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
         resolved_group = self._resolved_groups.get(group, group)

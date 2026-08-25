@@ -839,11 +839,19 @@ class Live2DModule:
                         current_layout_model_path = target_model_path
                         current_layout = get_live2d_layout(current_layout_model_path, model.version, layout_scene)
                         apply_current_layout()
-                        if self.if_sakiko and self.sakiko_state:
-                            model.SetSemanticExpression('serious')
-                        else:
-                            model.SetSemanticExpression('idle')
-                        model.StartRandomMotion("change_character",3,self.onStartCallback,self.onFinishCallback, position="C")
+                        shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
+                        semantic_expression = shared_scheduler.resolve_semantic_expression(
+                            'serious' if self.if_sakiko and self.sakiko_state else 'idle'
+                        )
+                        if semantic_expression is not None:
+                            model.set_expression_if_supported(semantic_expression)
+                        scheduled_motion = shared_scheduler.request_motion("change_character", 3, "model_switch")
+                        if scheduled_motion is not None:
+                            PygameScheduledMotionExecutor(model).execute(
+                                scheduled_motion,
+                                lambda *args: (shared_scheduler.motion_started("model_switch"), self.onStartCallback()),
+                                lambda *args: (shared_scheduler.motion_finished("model_switch"), self.onFinishCallback()),
+                            )
                         if self.current_character.icon_path is not None:
                             pygame.display.set_icon(pygame.image.load(self.current_character.icon_path))
                         logger.debug("Live2D模型切换成功：%s", self.PATH_JSON)

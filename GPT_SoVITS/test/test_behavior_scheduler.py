@@ -28,6 +28,8 @@ class SchedulerTest(unittest.TestCase):
     def test_explicit_intent_is_resolved_to_exact_motion(self):
         self.s.set_catalog({"bye": 2}); command = self.s.request_motion("bye", 3, "bye")
         self.assertEqual((command.group, command.priority, command.purpose), ("bye", 3, "bye"))
+    def test_semantic_expression_is_resolved_centrally(self):
+        self.s.set_model_catalog({}, ("exp_serious01",)); self.assertEqual(self.s.resolve_semantic_expression("serious"), "exp_serious01")
     def test_idle_and_click_preserve_master_conditions(self):
         self.clock.value = 2.5; self.assertEqual(self.s.tick().purpose, "idle_recover")
         self.assertIsNone(self.s.click(is_sakiko=False)); self.assertEqual(self.s.click(is_sakiko=True).purpose, "click")
