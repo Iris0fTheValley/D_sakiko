@@ -37,6 +37,8 @@ from live2d_support.runtime_adapter import (
 )
 from live2d_support.motion_semantics import motion_group_for_emotion
 from live2d_support.shared_behavior import SharedLive2DBehavior
+from live2d_support.shared_segment_executor import PygameSharedSegmentExecutor
+from live2d_support.segment_lifecycle import SharedSegmentLifecycle
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -220,20 +222,21 @@ class Live2DModule:
         logger = get_logger(__name__)
         if not audio_file_path or not os.path.isfile(audio_file_path):
             logger.warning("跳过无效音频路径：%s", audio_file_path)
-            return
+            return False
         try:
             # 播放音频
             pygame.mixer.music.load(audio_file_path)
             pygame.mixer.music.play()
         except pygame.error as exc:
             logger.warning("播放音频失败，已跳过：%s，错误：%s", audio_file_path, exc)
-            return
+            return False
         # 处理口型同步
         if audio_file_path!='../reference_audio/silent_audio/silence.wav':  #该函数无法处理无声音频
             try:
                 self.wavHandler.Start(audio_file_path)
             except Exception as exc:
                 logger.warning("口型同步读取音频失败，已跳过：%s，错误：%s", audio_file_path, exc)
+        return True
 
     # 动作播放结束后调用
     def onFinishCallback(self, *args):
@@ -446,9 +449,11 @@ class Live2DModule:
         current_runtime = None
         current_runtime_version = None
         model: Live2DModelProtocol = NullLive2DModel()
-        # Shadow-only until the normalized trace gate proves parity.  The
-        # existing Pygame branch below remains the authoritative executor.
-        shared_behavior_shadow = SharedLive2DBehavior()
+        shared_behavior = SharedLive2DBehavior()
+        shared_segment_lifecycle = SharedSegmentLifecycle(
+            shared_behavior,
+            lambda audio: self.onStartCallback_emotion_version(audio.audio_path),
+        )
         if self.PATH_JSON is not None:
             try:
                 current_runtime_version = detect_live2d_runtime_version(self.PATH_JSON)
@@ -881,7 +886,9 @@ class Live2DModule:
                 mouse_position_x = 0
                 self.think_motion_is_over=True
 
-            self.live2d_this_turn_motion_complete=not pygame.mixer.music.get_busy()
+            audio_busy = pygame.mixer.music.get_busy()
+            shared_segment_lifecycle.observe_audio_busy(audio_busy)
+            self.live2d_this_turn_motion_complete=not audio_busy
             # 更新到共享变量
             motion_complete_value.value = self.live2d_this_turn_motion_complete
 
@@ -960,40 +967,51 @@ class Live2DModule:
                 if not motion_group:
                     logger.warning("忽略未知情感标签：%s", emotion)
                     continue
+                shared_handled = False
                 if isinstance(model, Live2DModelAdapter):
-                    shared_behavior_shadow.set_model_catalog(
+                    shared_behavior.set_model_catalog(
                         model.motion_files_by_group,
                         model.expression_ids,
                     )
-                    shadow_command = shared_behavior_shadow.start_emotion_segment(
+                    shared_command = shared_behavior.start_emotion_segment(
                         turn_id="pygame-shadow",
                         segment_id=str(emotion),
                         emotion=str(emotion),
                         audio_path=this_turn_audio_file_path,
                     )
-                    if shadow_command is None:
+                    if shared_command is None:
                         logger.warning(
-                            "共享 Live2D shadow 无法解析旧情绪动作：emotion=%s group=%s",
+                            "共享 Live2D 无法解析情绪动作：emotion=%s group=%s",
                             emotion,
                             motion_group,
                         )
                     else:
-                        logger.debug(
-                            "共享 Live2D shadow 命令：emotion=%s motion=%s[%d] expression=%s",
-                            emotion,
-                            shadow_command.motion.group,
-                            shadow_command.motion.index,
-                            shadow_command.motion.expression_id,
-                        )
-                self._prepare_long_audio_motion_loop(motion_group, this_turn_audio_file_path)
-                self.motion_is_over = False
-                started = model.StartRandomMotion(motion_group,3,lambda *args:self.onStartCallback_emotion_version(audio_file_path=this_turn_audio_file_path),self.onFinishCallback, position="C")
-                if not started:
-                    self.onStartCallback_emotion_version(audio_file_path=this_turn_audio_file_path)
-                    self.motion_is_over = True
-                    self._reset_long_audio_motion_loop()
-                self.think_motion_is_over=True  #放在这里就对了。。
-                overlay.set_text(self.current_character.character_name,self.new_text)  #有感情标签传入，说明角色肯定要说话，此时更新文本
+                        def on_shared_segment_fact(fact, command_id):
+                            if fact == "motion_finished":
+                                shared_segment_lifecycle.consume_motion_fact(fact, command_id)
+                                self.onFinishCallback()
+                                return
+                            shared_segment_lifecycle.consume_motion_fact(fact, command_id)
+                            if fact == "motion_rejected":
+                                self.motion_is_over = True
+                                self._reset_long_audio_motion_loop()
+
+                        self._prepare_long_audio_motion_loop(motion_group, this_turn_audio_file_path)
+                        self.motion_is_over = False
+                        PygameSharedSegmentExecutor(model, on_shared_segment_fact).execute(shared_command)
+                        self.think_motion_is_over = True
+                        overlay.set_text(self.current_character.character_name, self.new_text)
+                        shared_handled = True
+                if not shared_handled:
+                    self._prepare_long_audio_motion_loop(motion_group, this_turn_audio_file_path)
+                    self.motion_is_over = False
+                    started = model.StartRandomMotion(motion_group,3,lambda *args:self.onStartCallback_emotion_version(audio_file_path=this_turn_audio_file_path),self.onFinishCallback, position="C")
+                    if not started:
+                        self.onStartCallback_emotion_version(audio_file_path=this_turn_audio_file_path)
+                        self.motion_is_over = True
+                        self._reset_long_audio_motion_loop()
+                    self.think_motion_is_over=True  #放在这里就对了。。
+                    overlay.set_text(self.current_character.character_name,self.new_text)  #有感情标签传入，说明角色肯定要说话，此时更新文本
 
 
             # 清除缓冲区
