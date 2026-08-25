@@ -710,9 +710,20 @@ class Live2DModule:
                 command_type = str(x.get("type") or "")
                 if command_type =='start_talking':   #录音时
                     self._reset_long_audio_motion_loop()
-                    model.StartRandomMotion("talking_motion", 4, self.onStartCallback, position="C")
+                    if isinstance(model, Live2DModelAdapter):
+                        shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
+                        scheduled_motion = shared_scheduler.request_motion("talking_motion", 4, "talking")
+                        if scheduled_motion is not None:
+                            PygameScheduledMotionExecutor(model).execute(
+                                scheduled_motion,
+                                lambda *args: (shared_scheduler.motion_started("talking"), self.onStartCallback()),
+                                None,
+                            )
+                    else:
+                        model.StartRandomMotion("talking_motion", 4, self.onStartCallback, position="C")
                 elif command_type=='stop_talking':   #录音结束
                     self._reset_long_audio_motion_loop()
+                    shared_scheduler.set_motion_over(True)
                     self.onFinishCallback()
                 elif command_type == "cancel_turn":
                     self._reset_long_audio_motion_loop()
