@@ -8,6 +8,7 @@ root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..")); sys.path.
 from live2d_support.renderer_host import SharedRendererHost
 from live2d_support.renderer_host import SharedRendererService
 from live2d_support.shared_behavior import SharedLive2DBehavior
+from live2d_support.behavior_scheduler import SharedBehaviorScheduler
 
 class RendererHostTest(unittest.TestCase):
     def setUp(self):
@@ -53,5 +54,10 @@ class RendererHostTest(unittest.TestCase):
         self.assertTrue(self.host.start_bye()); token=self.out[-1]["data"]["token"]
         self.host.handle_renderer_fact({"type":"motion_finished","data":{"token":"stale"}}); self.assertEqual(self.out[-1]["type"],"play_motion")
         self.host.handle_renderer_fact({"type":"motion_finished","data":{"token":token}}); self.assertEqual(self.out[-1]["type"],"close_renderer")
+    def test_click_is_resolved_by_shared_scheduler_not_electron(self):
+        host = SharedRendererHost(self.out.append, SharedLive2DBehavior(rng=Random(0)), SharedBehaviorScheduler(clock=lambda: 0.0, rng=Random(0)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"sakiko","motion_groups":{"IDLE":2}}})
+        self.assertTrue(host.handle_renderer_fact({"type":"renderer_intent","data":{"intent":"click"}}))
+        self.assertEqual((self.out[-1]["type"], self.out[-1]["data"]["group"], self.out[-1]["data"]["index"]), ("play_motion", "IDLE", 1))
 
 if __name__ == '__main__': unittest.main()

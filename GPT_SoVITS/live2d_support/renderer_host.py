@@ -4,10 +4,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from queue import Empty
 import time
+from uuid import uuid4
 from typing import Any
 
 from live2d_support.renderer_contract import audio_command, motion_command, normalize_renderer_fact
-from live2d_support.shared_behavior import SharedLive2DBehavior, StartAudio
+from live2d_support.shared_behavior import ExactMotion, PlaySegment, SharedLive2DBehavior, StartAudio
+from live2d_support.behavior_scheduler import ScheduledMotion, SharedBehaviorScheduler
 
 
 CommandEmitter = Callable[[dict[str, Any]], None]
@@ -16,10 +18,13 @@ CommandEmitter = Callable[[dict[str, Any]], None]
 class SharedRendererHost:
     """Adapt shared behavior to a command/fact transport without SDK imports."""
 
-    def __init__(self, emit: CommandEmitter, behavior: SharedLive2DBehavior | None = None) -> None:
+    def __init__(self, emit: CommandEmitter, behavior: SharedLive2DBehavior | None = None, scheduler: SharedBehaviorScheduler | None = None) -> None:
         self._emit = emit
         self._behavior = behavior or SharedLive2DBehavior()
+        self._scheduler = scheduler or SharedBehaviorScheduler(clock=time.monotonic)
         self._bye_token = ""
+        self._scheduled_tokens: dict[str, str] = {}
+        self._renderer_is_sakiko = False
 
     def start_bye(self) -> bool:
         command = self._behavior.start_named_motion(turn_id="", segment_id="", group="bye", priority=3)
@@ -54,13 +59,28 @@ class SharedRendererHost:
             expression_ids = data.get("expression_ids", ())
             if isinstance(motion_files, Mapping):
                 self._behavior.set_model_catalog(motion_files, expression_ids if isinstance(expression_ids, (list, tuple)) else ())
+                self._scheduler.set_model_catalog(motion_files, expression_ids if isinstance(expression_ids, (list, tuple)) else ())
             else:
                 self._behavior.set_capabilities(data.get("motion_groups", {}))
+                self._scheduler.set_catalog(data.get("motion_groups", {}))
+            self._renderer_is_sakiko = str(data.get("renderer_id", "")).lower() == "sakiko"
             return True
+        if message.get("type") == "renderer_intent" and data.get("intent") == "click":
+            command = self._scheduler.click(is_sakiko=self._renderer_is_sakiko)
+            return self._emit_scheduled(command)
         normalized = normalize_renderer_fact(message)
         if normalized is None:
             return False
         fact, token = normalized
+        scheduled_purpose = self._scheduled_tokens.get(token)
+        if scheduled_purpose is not None:
+            if fact == "motion_started":
+                self._scheduler.motion_started(scheduled_purpose)
+                return True
+            if fact in {"motion_rejected", "motion_finished", "command_failed"}:
+                self._scheduled_tokens.pop(token, None)
+                self._scheduler.motion_finished(scheduled_purpose)
+                return True
         active = self._behavior.active_command
         if fact == "motion_started":
             self._emit_audio(self._behavior.motion_started(token), active)
@@ -85,6 +105,23 @@ class SharedRendererHost:
             )
             return True
         return False
+
+    def tick(self) -> bool:
+        return self._emit_scheduled(self._scheduler.tick())
+
+    def _emit_scheduled(self, scheduled: ScheduledMotion | None) -> bool:
+        if scheduled is None:
+            return False
+        self._scheduler.motion_requested(scheduled.purpose)
+        token = uuid4().hex
+        command = PlaySegment(token, "scheduler", scheduled.purpose, ExactMotion(
+            scheduled.group, scheduled.index, scheduled.priority, expression_id=scheduled.expression_id,
+        ), "", 0.0)
+        self._scheduled_tokens[token] = scheduled.purpose
+        motion = motion_command(command)
+        assert motion is not None
+        self._emit(motion)
+        return True
 
     def _emit_audio(self, command: StartAudio | None, segment) -> None:
         if isinstance(command, StartAudio) and segment is not None:
@@ -123,6 +160,7 @@ class SharedRendererService:
                 turn_id=str(data.get("turn_id", "")), segment_id=str(data.get("segment_id", "")),
                 emotion=str(data.get("emotion", "")), audio_path=str(data.get("audio_path", "")),
             ))
+        handled += int(self._host.tick())
         return handled
 
     def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:

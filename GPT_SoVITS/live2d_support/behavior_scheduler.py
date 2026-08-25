@@ -92,6 +92,13 @@ class SharedBehaviorScheduler:
         else:
             self._motion_over = False
 
+    def motion_requested(self, purpose: str) -> None:
+        """Reserve a scheduler decision before its renderer callback arrives."""
+        if purpose == "thinking":
+            self._think_motion_over = False
+        else:
+            self._motion_over = False
+
     def motion_finished(self, purpose: str) -> None:
         now = self._clock()
         if purpose == "thinking":

@@ -53,15 +53,16 @@ onMounted(async () => {
     let expressionIds: string[] | undefined
     try {
       const modelDef = await fetch(modelSrc).then(r => r.json())
-      const motions = modelDef.motions || {}
+      const motions = modelDef.motions || modelDef.FileReferences?.Motions || {}
       motionFilesByGroup = {}
       for (const [group, entries] of Object.entries(motions)) {
         if (Array.isArray(entries)) {
-          motionFilesByGroup[group] = entries.map((entry: any) => String(entry?.file || ''))
+          motionFilesByGroup[group] = entries.map((entry: any) => String(entry?.file || entry?.File || ''))
         }
       }
-      expressionIds = Array.isArray(modelDef.expressions)
-        ? modelDef.expressions.map((entry: any) => String(entry?.name || entry?.file || '').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '')).filter(Boolean)
+      const expressions = modelDef.expressions || modelDef.FileReferences?.Expressions || []
+      expressionIds = Array.isArray(expressions)
+        ? expressions.map((entry: any) => String(entry?.name || entry?.Name || entry?.file || entry?.File || '').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '')).filter(Boolean)
         : []
       console.log('[Live2DStage] Renderer capability catalog loaded')
     } catch (e) {
