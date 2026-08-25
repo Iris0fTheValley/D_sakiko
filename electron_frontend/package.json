@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
     "start": "electron ."
   },
   "dependencies": {
