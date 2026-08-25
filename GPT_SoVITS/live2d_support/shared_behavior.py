@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from random import Random
-from typing import Mapping
+from typing import Iterable, Mapping
 from uuid import uuid4
 
 from live2d_support.motion_semantics import motion_group_for_emotion
+from live2d_support.motion_selection import resolve_positioned_motion_group
+from live2d_support.expression_policy import select_expression_for_motion
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class ExactMotion:
     index: int
     priority: int = 3
     position: str = "C"
+    expression_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,25 @@ class SharedLive2DBehavior:
             if int(count) > 0
         }
 
+    def set_model_catalog(
+        self,
+        motion_files_by_group: Mapping[str, Iterable[str]],
+        expression_ids: Iterable[str] = (),
+    ) -> None:
+        """Install renderer-reported capability facts for exact decisions.
+
+        The catalog contains concrete group names (including optional ``_C``
+        variants), ordered motion files, and supported expression IDs.  It is
+        intentionally data-only: neither renderer gets to make a second
+        selection after this method has accepted the facts.
+        """
+        self._motion_files_by_group = {
+            str(group): tuple(str(path) for path in files)
+            for group, files in motion_files_by_group.items()
+        }
+        self._expression_ids = frozenset(str(expression_id) for expression_id in expression_ids)
+        self.set_capabilities({group: len(files) for group, files in self._motion_files_by_group.items()})
+
     def start_emotion_segment(
         self, *, turn_id: str, segment_id: str, emotion: str,
         audio_path: str, audio_duration_seconds: float = 0.0,
@@ -78,14 +100,23 @@ class SharedLive2DBehavior:
         while that boundary still preserves the source FIFO-consumption order.
         """
         group = motion_group_for_emotion(emotion, default="")
-        capability = self._capabilities.get(group)
+        resolved_group = resolve_positioned_motion_group(group, "C", self._capabilities)
+        capability = self._capabilities.get(resolved_group)
         if not group or capability is None:
             return None
+        motion_index = self._rng.randrange(capability.count)
+        motion_files = getattr(self, "_motion_files_by_group", {})
+        motion_file = motion_files.get(resolved_group, (None,) * capability.count)[motion_index]
+        expression_ids = getattr(self, "_expression_ids", frozenset())
         command = PlaySegment(
             command_id=uuid4().hex,
             turn_id=turn_id,
             segment_id=segment_id,
-            motion=ExactMotion(group, self._rng.randrange(capability.count)),
+            motion=ExactMotion(
+                resolved_group,
+                motion_index,
+                expression_id=select_expression_for_motion(resolved_group, motion_file, expression_ids),
+            ),
             audio_path=audio_path,
             audio_duration_seconds=max(0.0, audio_duration_seconds),
         )

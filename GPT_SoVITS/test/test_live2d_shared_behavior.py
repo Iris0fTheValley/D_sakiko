@@ -52,6 +52,22 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
             turn_id="turn", segment_id="segment", emotion="unknown", audio_path="left-queued.wav",
         ))
 
+    def test_catalog_resolves_center_group_and_expression_before_adapter_execution(self) -> None:
+        self.behavior.set_model_catalog(
+            {
+                "happiness": ("happy_base.mtn",),
+                "happiness_C": ("happy_smile.mtn", "happy_other.mtn"),
+            },
+            expression_ids=("exp_smile01",),
+        )
+        command = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        assert command is not None
+        self.assertEqual(command.motion.group, "happiness_C")
+        self.assertIn(command.motion.index, range(2))
+        self.assertEqual(command.motion.expression_id, "exp_smile01")
+
     def test_failure_and_stale_facts_cannot_leave_segment_busy(self) -> None:
         command = self.behavior.start_emotion_segment(
             turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
