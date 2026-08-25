@@ -12,8 +12,9 @@ def read_audio_duration_seconds(audio_file_path: str) -> float:
     try:
         with wave.open(audio_file_path, "rb") as audio_file:
             frame_rate = audio_file.getframerate()
-            if frame_rate > 0:
-                return audio_file.getnframes() / frame_rate
+            if frame_rate <= 0:
+                return 0.0
+            return audio_file.getnframes() / frame_rate
     except Exception:
         pass
     try:
