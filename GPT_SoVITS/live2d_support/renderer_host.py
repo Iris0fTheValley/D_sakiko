@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from queue import Empty
 from typing import Any
 
 from live2d_support.renderer_contract import audio_command, motion_command, normalize_renderer_fact
@@ -63,3 +64,36 @@ class SharedRendererHost:
     def _emit_audio(self, command: StartAudio | None, segment) -> None:
         if command is not None and segment is not None:
             self._emit(audio_command(command, segment))
+
+
+class SharedRendererService:
+    """Queue adapter for bridge deployments; its policy remains in the host."""
+
+    def __init__(self, intent_queue, renderer_fact_queue, command_queue) -> None:
+        self._intents = intent_queue
+        self._facts = renderer_fact_queue
+        self._host = SharedRendererHost(command_queue.put)
+
+    def run_once(self) -> int:
+        handled = 0
+        while True:
+            try:
+                fact = self._facts.get_nowait()
+            except Empty:
+                break
+            handled += int(isinstance(fact, Mapping) and self._host.handle_renderer_fact(fact))
+        while True:
+            try:
+                intent = self._intents.get_nowait()
+            except Empty:
+                break
+            if not isinstance(intent, Mapping) or intent.get("type") != "emotion_segment":
+                continue
+            data = intent.get("data", {})
+            if not isinstance(data, Mapping):
+                continue
+            handled += int(self._host.start_emotion_segment(
+                turn_id=str(data.get("turn_id", "")), segment_id=str(data.get("segment_id", "")),
+                emotion=str(data.get("emotion", "")), audio_path=str(data.get("audio_path", "")),
+            ))
+        return handled

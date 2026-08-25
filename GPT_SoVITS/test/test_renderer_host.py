@@ -1,8 +1,10 @@
 from __future__ import annotations
 import os, sys, unittest
 from random import Random
+from queue import Queue
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..")); sys.path.insert(0, root) if root not in sys.path else None
 from live2d_support.renderer_host import SharedRendererHost
+from live2d_support.renderer_host import SharedRendererService
 from live2d_support.shared_behavior import SharedLive2DBehavior
 
 class RendererHostTest(unittest.TestCase):
@@ -18,5 +20,15 @@ class RendererHostTest(unittest.TestCase):
         self.host.start_emotion_segment(turn_id="t",segment_id="s",emotion="LABEL_0",audio_path="a.wav")
         token = self.out[0]["data"]["token"]
         self.assertTrue(self.host.handle_renderer_fact({"type":"command_failed","data":{"token":token,"phase":"audio_start"}}))
+
+    def test_service_turns_queue_intent_and_fact_into_bridge_commands(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands)
+        facts.put({"type":"renderer_ready","data":{"motion_groups":{"happiness":1}}})
+        intents.put({"type":"emotion_segment","data":{"turn_id":"t","segment_id":"s","emotion":"LABEL_0","audio_path":"a.wav"}})
+        self.assertEqual(service.run_once(), 2)
+        motion = commands.get_nowait(); self.assertEqual(motion["type"], "play_motion")
+        facts.put({"type":"motion_started","data":{"token":motion["data"]["token"]}})
+        self.assertEqual(service.run_once(), 1); self.assertEqual(commands.get_nowait()["type"], "play_audio")
 
 if __name__ == '__main__': unittest.main()
