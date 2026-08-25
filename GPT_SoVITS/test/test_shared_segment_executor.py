@@ -11,6 +11,7 @@ if script_dir not in sys.path:
 from live2d_support.shared_behavior import ExactMotion, PlaySegment
 from live2d_support.shared_segment_executor import PygameSharedSegmentExecutor
 from live2d_support.shared_segment_executor import PygameScheduledMotionExecutor
+from live2d_support.shared_segment_executor import PygameRendererCommandAdapter
 from live2d_support.behavior_scheduler import ScheduledMotion
 
 
@@ -67,6 +68,12 @@ class PygameSharedSegmentExecutorTestCase(unittest.TestCase):
         self.assertTrue(PygameScheduledMotionExecutor(runtime).execute(command, lambda: started.append(True), lambda: finished.append(True)))
         self.assertEqual(runtime.calls, [("expression", "exp_smile01"), ("motion", "IDLE_C", 1, 1, None, False)])
         self.assertEqual((started, finished), ([True], [True]))
+
+    def test_contract_adapter_executes_no_local_choice(self) -> None:
+        runtime, facts = FakeRuntime(True), []
+        self.assertTrue(PygameRendererCommandAdapter(runtime, facts.append).execute({"type":"play_motion","data":{"token":"t","group":"IDLE_C","index":1,"priority":1,"expression_id":"exp_smile01"}}))
+        self.assertEqual(runtime.calls, [("expression", "exp_smile01"), ("motion", "IDLE_C", 1, 1, None, False)])
+        self.assertEqual([fact["type"] for fact in facts], ["motion_started", "motion_finished"])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Thin Pygame-side executor for already-decided shared segment commands."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Protocol
 
 from live2d_support.shared_behavior import PlaySegment
@@ -64,3 +64,24 @@ class PygameScheduledMotionExecutor:
             position=None,
             auto_expression=False,
         )
+
+
+class PygameRendererCommandAdapter:
+    """Execute only exact owner commands and return mechanical lifecycle facts."""
+
+    def __init__(self, runtime: ExactMotionRuntime, emit_fact: Callable[[dict], None]) -> None:
+        self._runtime, self._emit_fact = runtime, emit_fact
+
+    def execute(self, command: Mapping[str, object]) -> bool:
+        data = command.get("data")
+        if command.get("type") != "play_motion" or not isinstance(data, Mapping): return False
+        token, group, index = str(data.get("token") or ""), str(data.get("group") or ""), data.get("index")
+        if not token or not group or not isinstance(index, int):
+            self._emit_fact({"type":"command_failed","data":{"token":token,"phase":"motion_start"}}); return False
+        expression = data.get("expression_id")
+        if isinstance(expression, str) and expression: self._runtime.set_expression_if_supported(expression)
+        def started(*_): self._emit_fact({"type":"motion_started","data":{"token":token}})
+        def finished(*_): self._emit_fact({"type":"motion_finished","data":{"token":token}})
+        ok = self._runtime.StartMotion(group, index, int(data.get("priority", 3)), started, finished, position=None, auto_expression=False)
+        if not ok: self._emit_fact({"type":"command_failed","data":{"token":token,"phase":"motion_start"}})
+        return ok
