@@ -860,7 +860,7 @@ class Live2DModule:
                     logger.warning("忽略未知 Live2D 命令：%s", x)
 
             if isinstance(model, Live2DModelAdapter):
-                shared_scheduler.set_catalog(model.motion_files_by_group)
+                shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
                 shared_scheduler.set_thinking(not is_text_generating_queue.empty())
                 if not is_text_generating_queue.empty() and self.think_motion_is_over:
                     scheduled_motion = shared_scheduler.tick()
@@ -894,7 +894,15 @@ class Live2DModule:
                 last_saved_time=time.time()
 
             if not layout_editing and mouse_position_x != 0:  # 点击画面随机做动作
-                if self.if_sakiko:
+                if isinstance(model, Live2DModelAdapter):
+                    scheduled_motion = shared_scheduler.click(is_sakiko=self.if_sakiko)
+                    if scheduled_motion is not None:
+                        PygameScheduledMotionExecutor(model).execute(
+                            scheduled_motion,
+                            lambda *args: (shared_scheduler.motion_started("click"), self.onStartCallback()),
+                            lambda *args: (shared_scheduler.motion_finished("click"), self.onFinishCallback()),
+                        )
+                elif self.if_sakiko:
                     model.StartRandomMotion("IDLE",1,self.onStartCallback,self.onFinishCallback, position="C")
                 mouse_position_x = 0
                 self.think_motion_is_over=True

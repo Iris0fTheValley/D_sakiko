@@ -63,9 +63,9 @@ class PygameSharedSegmentExecutorTestCase(unittest.TestCase):
     def test_scheduler_motion_is_executed_exactly(self) -> None:
         runtime = FakeRuntime(True)
         started, finished = [], []
-        command = ScheduledMotion("IDLE_C", 1, 1, "timed_idle")
+        command = ScheduledMotion("IDLE_C", 1, 1, "timed_idle", "exp_smile01")
         self.assertTrue(PygameScheduledMotionExecutor(runtime).execute(command, lambda: started.append(True), lambda: finished.append(True)))
-        self.assertEqual(runtime.calls, [("motion", "IDLE_C", 1, 1, None, False)])
+        self.assertEqual(runtime.calls, [("expression", "exp_smile01"), ("motion", "IDLE_C", 1, 1, None, False)])
         self.assertEqual((started, finished), ([True], [True]))
 
 

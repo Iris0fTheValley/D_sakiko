@@ -28,5 +28,8 @@ class SchedulerTest(unittest.TestCase):
     def test_center_variant_is_resolved_before_executor(self):
         self.s.set_catalog({"IDLE": 1, "IDLE_C": 2})
         self.assertEqual(self.s.click(is_sakiko=True).group, "IDLE_C")
+    def test_catalog_resolves_expression_before_executor(self):
+        self.s.set_model_catalog({"IDLE": ("idle_smile.mtn",)}, ("exp_smile01",))
+        self.assertEqual(self.s.click(is_sakiko=True).expression_id, "exp_smile01")
 
 if __name__ == '__main__': unittest.main()

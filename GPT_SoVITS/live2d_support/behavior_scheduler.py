@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from random import Random
-from typing import Callable, Mapping
+from typing import Callable, Iterable, Mapping
+
+from live2d_support.expression_policy import select_expression_for_motion
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,7 @@ class ScheduledMotion:
     index: int
     priority: int
     purpose: str
+    expression_id: str | None = None
 
 
 class SharedBehaviorScheduler:
@@ -21,6 +24,8 @@ class SharedBehaviorScheduler:
         self._clock, self._rng = clock, rng or Random()
         self._catalog: dict[str, int] = {}
         self._resolved_groups: dict[str, str] = {}
+        self._motion_files: dict[str, tuple[str, ...]] = {}
+        self._expression_ids: frozenset[str] = frozenset()
         now = clock()
         self._thinking = False
         self._think_motion_over = True
@@ -43,6 +48,11 @@ class SharedBehaviorScheduler:
                 self._resolved_groups[base] = group
         for group in self._catalog:
             self._resolved_groups.setdefault(group, group)
+
+    def set_model_catalog(self, motion_files_by_group: Mapping[str, Iterable[str]], expression_ids: Iterable[str] = ()) -> None:
+        self._motion_files = {str(group): tuple(str(path) for path in files) for group, files in motion_files_by_group.items()}
+        self._expression_ids = frozenset(str(value) for value in expression_ids)
+        self.set_catalog({group: len(files) for group, files in self._motion_files.items()})
 
     def set_thinking(self, active: bool) -> None:
         if active == self._thinking:
@@ -116,4 +126,9 @@ class SharedBehaviorScheduler:
         count = self._catalog.get(resolved_group, 0)
         if count <= 0:
             return None
-        return ScheduledMotion(resolved_group, self._rng.randrange(count), priority, purpose)
+        index = self._rng.randrange(count)
+        motion_file = self._motion_files.get(resolved_group, (None,) * count)[index]
+        return ScheduledMotion(
+            resolved_group, index, priority, purpose,
+            select_expression_for_motion(resolved_group, motion_file, self._expression_ids),
+        )
