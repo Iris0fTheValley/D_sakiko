@@ -26,6 +26,9 @@ class PygameSharedSegmentExecutor:
 
     def execute(self, command: PlaySegment) -> bool:
         motion = command.motion
+        if motion is None:
+            self._emit_fact("motion_rejected", command.command_id)
+            return False
         if motion.expression_id is not None:
             self._runtime.set_expression_if_supported(motion.expression_id)
         started = self._runtime.StartMotion(

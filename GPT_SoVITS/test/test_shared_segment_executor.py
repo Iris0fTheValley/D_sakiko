@@ -50,6 +50,14 @@ class PygameSharedSegmentExecutorTestCase(unittest.TestCase):
         self.assertFalse(PygameSharedSegmentExecutor(runtime, lambda kind, token: facts.append((kind, token))).execute(command()))
         self.assertEqual(facts, [("motion_rejected", "cmd")])
 
+    def test_audio_only_fallback_does_not_call_the_motion_runtime(self) -> None:
+        runtime = FakeRuntime(True)
+        facts = []
+        audio_only = PlaySegment("cmd", "turn", "segment", None, "a.wav", 1.0)
+        self.assertFalse(PygameSharedSegmentExecutor(runtime, lambda kind, token: facts.append((kind, token))).execute(audio_only))
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(facts, [("motion_rejected", "cmd")])
+
 
 if __name__ == "__main__":
     unittest.main()

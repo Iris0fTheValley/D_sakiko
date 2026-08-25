@@ -39,7 +39,7 @@ class PlaySegment:
     command_id: str
     turn_id: str
     segment_id: str
-    motion: ExactMotion
+    motion: ExactMotion | None
     audio_path: str
     audio_duration_seconds: float
 
@@ -110,21 +110,24 @@ class SharedLive2DBehavior:
         group = motion_group_for_emotion(emotion, default="")
         resolved_group = resolve_positioned_motion_group(group, "C", self._capabilities)
         capability = self._capabilities.get(resolved_group)
-        if not group or capability is None:
+        if not group:
             return None
-        motion_index = self._rng.randrange(capability.count)
-        motion_files = getattr(self, "_motion_files_by_group", {})
-        motion_file = motion_files.get(resolved_group, (None,) * capability.count)[motion_index]
-        expression_ids = getattr(self, "_expression_ids", frozenset())
+        motion = None
+        if capability is not None:
+            motion_index = self._rng.randrange(capability.count)
+            motion_files = getattr(self, "_motion_files_by_group", {})
+            motion_file = motion_files.get(resolved_group, (None,) * capability.count)[motion_index]
+            expression_ids = getattr(self, "_expression_ids", frozenset())
+            motion = ExactMotion(
+                resolved_group,
+                motion_index,
+                expression_id=select_expression_for_motion(resolved_group, motion_file, expression_ids),
+            )
         command = PlaySegment(
             command_id=uuid4().hex,
             turn_id=turn_id,
             segment_id=segment_id,
-            motion=ExactMotion(
-                resolved_group,
-                motion_index,
-                expression_id=select_expression_for_motion(resolved_group, motion_file, expression_ids),
-            ),
+            motion=motion,
             audio_path=audio_path,
             audio_duration_seconds=max(0.0, audio_duration_seconds),
         )

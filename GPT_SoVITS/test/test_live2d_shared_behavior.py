@@ -56,6 +56,15 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
             turn_id="turn", segment_id="segment", emotion="unknown", audio_path="left-queued.wav",
         ))
 
+    def test_known_emotion_without_motion_capability_uses_audio_only_fallback(self) -> None:
+        self.behavior.set_capabilities({})
+        command = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertIsNone(command.motion)
+
     def test_catalog_resolves_center_group_and_expression_before_adapter_execution(self) -> None:
         self.behavior.set_model_catalog(
             {
