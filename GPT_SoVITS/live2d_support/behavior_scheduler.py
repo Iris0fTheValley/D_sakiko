@@ -45,6 +45,8 @@ class SharedBehaviorScheduler:
             self._resolved_groups.setdefault(group, group)
 
     def set_thinking(self, active: bool) -> None:
+        if active == self._thinking:
+            return
         self._thinking = active
         if active:
             self._thinking_due = self._clock() + (1.0 if self._think_motion_over else 15.0)

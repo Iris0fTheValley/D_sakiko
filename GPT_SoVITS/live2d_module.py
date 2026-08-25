@@ -38,7 +38,9 @@ from live2d_support.runtime_adapter import (
 from live2d_support.motion_semantics import motion_group_for_emotion
 from live2d_support.shared_behavior import SharedLive2DBehavior
 from live2d_support.shared_segment_executor import PygameSharedSegmentExecutor
+from live2d_support.shared_segment_executor import PygameScheduledMotionExecutor
 from live2d_support.segment_lifecycle import SharedSegmentLifecycle
+from live2d_support.behavior_scheduler import SharedBehaviorScheduler
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -454,6 +456,7 @@ class Live2DModule:
             shared_behavior,
             lambda audio: self.onStartCallback_emotion_version(audio.audio_path),
         )
+        shared_scheduler = SharedBehaviorScheduler(clock=time.time)
         if self.PATH_JSON is not None:
             try:
                 current_runtime_version = detect_live2d_runtime_version(self.PATH_JSON)
@@ -856,10 +859,20 @@ class Live2DModule:
                 else:
                     logger.warning("忽略未知 Live2D 命令：%s", x)
 
-            if not is_text_generating_queue.empty() and self.think_motion_is_over:  # 思考时
+            if isinstance(model, Live2DModelAdapter):
+                shared_scheduler.set_catalog(model.motion_files_by_group)
+                shared_scheduler.set_thinking(not is_text_generating_queue.empty())
+                if not is_text_generating_queue.empty() and self.think_motion_is_over:
+                    scheduled_motion = shared_scheduler.tick()
+                    if scheduled_motion is not None and scheduled_motion.purpose == "thinking":
+                        PygameScheduledMotionExecutor(model).execute(
+                            scheduled_motion,
+                            lambda *args: (shared_scheduler.motion_started("thinking"), self.onStartCallback_think_motion_version()),
+                            lambda *args: (shared_scheduler.motion_finished("thinking"), self.onFinishCallback_think_motion_version()),
+                        )
+            elif not is_text_generating_queue.empty() and self.think_motion_is_over:  # Null runtime compatibility
                 if time.time()-last_saved_time_think>interval_think:
                     model.StartRandomMotion("text_generating",3,self.onStartCallback_think_motion_version, self.onFinishCallback_think_motion_version, position="C")
-
                     last_saved_time_think=time.time()
                     interval_think=15
 
