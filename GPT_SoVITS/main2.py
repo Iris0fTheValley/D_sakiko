@@ -358,6 +358,7 @@ def handle_electron_model_response_payload(payload: dict[str, object]) -> None:
             mark_segments_no_audio(payload, segments_raw, index)
             break
         text = str(segment_raw.get("text") or "")
+        translation = str(segment_raw.get("translation") or "").strip()
         emotion_label = str(segment_raw.get("emotion") or "LABEL_0")
         force_no_audio = bool(segment_raw.get("force_no_audio", False)) or not dp_chat.if_generate_audio
         audio_path = ""
@@ -385,13 +386,16 @@ def handle_electron_model_response_payload(payload: dict[str, object]) -> None:
         with electron_segment_events_lock:
             electron_segment_events[segment_id] = waiter
         try:
+            # Publish the generated segment immediately.  Text display must
+            # not wait for the audio/motion lifecycle to finish.
+            dp2qt_queue.put(build_assistant_segment_event(payload, segment_raw, audio_path or "NO_AUDIO"))
             electron_controller.start_emotion_segment(
                 turn_id=turn_id,
                 segment_id=segment_id,
                 emotion=emotion_label,
                 audio_url=electron_audio_url(audio_path) if audio_path else "",
                 audio_duration=_audio_duration_seconds(audio_path) if audio_path else 0.0,
-                text=text,
+                text=translation,
             )
             while not waiter.wait(0.25):
                 if is_payload_turn_cancelled(payload):
@@ -404,8 +408,6 @@ def handle_electron_model_response_payload(payload: dict[str, object]) -> None:
         finally:
             with electron_segment_events_lock:
                 electron_segment_events.pop(segment_id, None)
-        translation = str(segment_raw.get("translation") or "")
-        dp2qt_queue.put(build_assistant_segment_event(payload, segment_raw, audio_path or "NO_AUDIO"))
 
     is_audio_play_complete.put("yes")
     if turn_status in {"cancelled", "error"}:
