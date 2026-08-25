@@ -158,6 +158,10 @@ class SharedBehaviorScheduler:
             self._long_repeats += 1
         return command
 
+    def request_motion(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
+        """Resolve an explicit upstream intent without renderer-side selection."""
+        return self._exact(group, priority, purpose)
+
     def _exact(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
         resolved_group = self._resolved_groups.get(group, group)
         count = self._catalog.get(resolved_group, 0)

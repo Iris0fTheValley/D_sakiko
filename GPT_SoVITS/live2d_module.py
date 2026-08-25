@@ -985,9 +985,23 @@ class Live2DModule:
                 if emotion=='bye':
                     self._reset_long_audio_motion_loop()
                     if not if_bye:
-                        started = model.StartRandomMotion("bye",3,self.onStartCallback,self.onFinishCallback, position="C")
-                        if not started:
-                            self.motion_is_over = True
+                        if isinstance(model, Live2DModelAdapter):
+                            shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
+                            scheduled_motion = shared_scheduler.request_motion("bye", 3, "bye")
+                            if scheduled_motion is None:
+                                self.motion_is_over = True
+                            else:
+                                started = PygameScheduledMotionExecutor(model).execute(
+                                    scheduled_motion,
+                                    lambda *args: (shared_scheduler.motion_started("bye"), self.onStartCallback()),
+                                    lambda *args: (shared_scheduler.motion_finished("bye"), self.onFinishCallback()),
+                                )
+                                if not started:
+                                    self.motion_is_over = True
+                        else:
+                            started = model.StartRandomMotion("bye",3,self.onStartCallback,self.onFinishCallback, position="C")
+                            if not started:
+                                self.motion_is_over = True
                     if_bye=True
                     glClear(GL_COLOR_BUFFER_BIT)
                     model.Update()
