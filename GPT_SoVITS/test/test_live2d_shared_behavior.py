@@ -28,7 +28,10 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
         self.assertIn(command.motion.index, range(3))
         self.assertEqual((command.motion.priority, command.motion.position), (3, "C"))
         self.assertTrue(self.behavior.legacy_motion_complete)
-        self.assertTrue(self.behavior.motion_started(command.command_id))
+        audio_command = self.behavior.motion_started(command.command_id)
+        self.assertIsNotNone(audio_command)
+        assert audio_command is not None
+        self.assertEqual(audio_command.audio_path, "answer.wav")
         self.assertTrue(self.behavior.audio_started(command.command_id))
         self.assertFalse(self.behavior.legacy_motion_complete)
         self.assertTrue(self.behavior.motion_finished(command.command_id))
@@ -41,7 +44,8 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
             turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
         )
         assert command is not None
-        self.assertTrue(self.behavior.motion_rejected(command.command_id))
+        self.assertIsNotNone(self.behavior.motion_rejected(command.command_id))
+        self.assertIsNone(self.behavior.motion_rejected(command.command_id))
         self.assertTrue(self.behavior.audio_started(command.command_id))
         self.assertFalse(self.behavior.legacy_motion_complete)
         self.assertTrue(self.behavior.audio_ended(command.command_id))
@@ -77,6 +81,15 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
         self.assertTrue(self.behavior.command_failed(command.command_id, "audio_start"))
         self.assertTrue(self.behavior.legacy_motion_complete)
         self.assertIsNone(self.behavior.active_command)
+
+    def test_motion_start_failure_issues_one_audio_fallback_command(self) -> None:
+        command = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        assert command is not None
+        fallback = self.behavior.command_failed(command.command_id, "motion_start")
+        self.assertIsNotNone(fallback)
+        self.assertIsNone(self.behavior.motion_started(command.command_id))
 
 
 if __name__ == "__main__":

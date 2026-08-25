@@ -44,6 +44,13 @@ class PlaySegment:
     audio_duration_seconds: float
 
 
+@dataclass(frozen=True)
+class StartAudio:
+    """Exact audio command emitted only after its motion lifecycle fact."""
+    command_id: str
+    audio_path: str
+
+
 class SharedLive2DBehavior:
     """Small authoritative state for the first migrated behaviour slice."""
 
@@ -53,6 +60,7 @@ class SharedLive2DBehavior:
         self._active_command: PlaySegment | None = None
         self._motion_active = False
         self._audio_active = False
+        self._audio_start_dispatched = False
 
     @property
     def legacy_motion_complete(self) -> bool:
@@ -123,19 +131,20 @@ class SharedLive2DBehavior:
         self._active_command = command
         self._motion_active = False
         self._audio_active = False
+        self._audio_start_dispatched = False
         return command
 
-    def motion_started(self, command_id: str) -> bool:
+    def motion_started(self, command_id: str) -> StartAudio | None:
         if not self._matches(command_id):
-            return False
+            return None
         self._motion_active = True
-        return True
+        return self._issue_audio_start()
 
-    def motion_rejected(self, command_id: str) -> bool:
+    def motion_rejected(self, command_id: str) -> StartAudio | None:
         if not self._matches(command_id):
-            return False
+            return None
         self._motion_active = False
-        return True
+        return self._issue_audio_start()
 
     def motion_finished(self, command_id: str) -> bool:
         if not self._matches(command_id):
@@ -156,16 +165,22 @@ class SharedLive2DBehavior:
         self._active_command = None
         return True
 
-    def command_failed(self, command_id: str, phase: str) -> bool:
+    def command_failed(self, command_id: str, phase: str) -> StartAudio | bool:
         """Normalize an adapter failure into a non-blocking lifecycle fact."""
         if not self._matches(command_id):
             return False
         if phase == "motion_start":
             self._motion_active = False
-            return True
+            return self._issue_audio_start()
         self._audio_active = False
         self._active_command = None
         return True
 
     def _matches(self, command_id: str) -> bool:
         return self._active_command is not None and self._active_command.command_id == command_id
+
+    def _issue_audio_start(self) -> StartAudio | None:
+        if self._active_command is None or self._audio_start_dispatched:
+            return None
+        self._audio_start_dispatched = True
+        return StartAudio(self._active_command.command_id, self._active_command.audio_path)
