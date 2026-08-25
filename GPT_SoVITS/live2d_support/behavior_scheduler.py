@@ -121,6 +121,16 @@ class SharedBehaviorScheduler:
             return self._exact("IDLE", 1, "timed_idle")
         return None
 
+    def timed_idle_due(self) -> ScheduledMotion | None:
+        """Master's 25-second IDLE check; always advances its deadline."""
+        now = self._clock()
+        if now < self._timed_idle_due:
+            return None
+        self._timed_idle_due = now + 25.0
+        if self._audio_busy or self._thinking:
+            return None
+        return self._exact("IDLE", 1, "timed_idle")
+
     def _exact(self, group: str, priority: int, purpose: str) -> ScheduledMotion | None:
         resolved_group = self._resolved_groups.get(group, group)
         count = self._catalog.get(resolved_group, 0)

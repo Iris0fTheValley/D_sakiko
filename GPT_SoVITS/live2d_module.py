@@ -862,6 +862,7 @@ class Live2DModule:
             if isinstance(model, Live2DModelAdapter):
                 shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
                 shared_scheduler.set_thinking(not is_text_generating_queue.empty())
+                shared_scheduler.set_audio_busy(pygame.mixer.music.get_busy())
                 if not is_text_generating_queue.empty() and self.think_motion_is_over:
                     scheduled_motion = shared_scheduler.tick()
                     if scheduled_motion is not None and scheduled_motion.purpose == "thinking":
@@ -888,7 +889,15 @@ class Live2DModule:
                 if is_text_generating_queue.empty() and time.time()-idle_recover_timer>2.5:
                     model.StartRandomMotion("idle_motion", 1, self.onStartCallback, position="C")
 
-            if (time.time()-last_saved_time)>25 :   #待机动作
+            if isinstance(model, Live2DModelAdapter):
+                scheduled_motion = shared_scheduler.timed_idle_due()
+                if scheduled_motion is not None:
+                    PygameScheduledMotionExecutor(model).execute(
+                        scheduled_motion,
+                        lambda *args: (shared_scheduler.motion_started("timed_idle"), self.onStartCallback()),
+                        lambda *args: (shared_scheduler.motion_finished("timed_idle"), self.onFinishCallback()),
+                    )
+            elif (time.time()-last_saved_time)>25 :   # Null runtime compatibility
                 if self.live2d_this_turn_motion_complete and is_text_generating_queue.empty():
                     model.StartRandomMotion("IDLE",1,self.onStartCallback,self.onFinishCallback, position="C")
                 last_saved_time=time.time()

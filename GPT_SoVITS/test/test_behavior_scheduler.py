@@ -31,5 +31,9 @@ class SchedulerTest(unittest.TestCase):
     def test_catalog_resolves_expression_before_executor(self):
         self.s.set_model_catalog({"IDLE": ("idle_smile.mtn",)}, ("exp_smile01",))
         self.assertEqual(self.s.click(is_sakiko=True).expression_id, "exp_smile01")
+    def test_timed_idle_resets_deadline_even_when_audio_blocks_it(self):
+        self.clock.value = 25.0; self.s.set_audio_busy(True); self.assertIsNone(self.s.timed_idle_due())
+        self.s.set_audio_busy(False); self.clock.value = 49.9; self.assertIsNone(self.s.timed_idle_due())
+        self.clock.value = 50.0; self.assertEqual(self.s.timed_idle_due().purpose, "timed_idle")
 
 if __name__ == '__main__': unittest.main()
