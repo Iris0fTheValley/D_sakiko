@@ -198,6 +198,12 @@ def electron_renderer_loop() -> None:
                 # QApplication thread without touching legacy Pygame queues.
                 if electron_ui_commands is not None:
                     electron_ui_commands.put({"type": "open_python_settings"})
+            elif data.get("intent") in {"start_voice_input", "stop_voice_input"}:
+                # Qt owns the microphone stream and Whisper lifecycle.  Electron
+                # only forwards the press/release gesture through this dedicated
+                # UI queue; it never creates a second recording pipeline.
+                if electron_ui_commands is not None:
+                    electron_ui_commands.put({"type": str(data["intent"])})
             continue
         electron_controller.handle_renderer_event(message)
         if str(message.get("type") or "") == "renderer_ready":

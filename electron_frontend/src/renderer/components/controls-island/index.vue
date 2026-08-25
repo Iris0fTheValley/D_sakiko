@@ -84,6 +84,7 @@ async function toggleAlwaysOnTop() {
 const fadeOnHover = inject<ReturnType<typeof ref<boolean>>>('fadeOnHoverEnabled', ref(false))
 const toggleFadeOnHover = inject<() => void>('toggleFadeOnHover', () => {})
 const sendRendererIntent = inject<(intent: string) => void>('sendRendererIntent', () => {})
+const isVoiceRecording = ref(false)
 
 // ── 鼠标穿透（照搬 airi 逻辑）──
 // fadeOnHover ON + 鼠标在面板外 → 穿透；鼠标在面板内或面板展开 → 不穿透
@@ -134,6 +135,23 @@ function toggleSettings() {
 function closeSettings() {
   settingsOpen.value = false
   setOverlay('settings', false)
+}
+
+function startVoiceInput(event: PointerEvent) {
+  if (isVoiceRecording.value) return
+  isVoiceRecording.value = true
+  // Keep receiving pointerup even when the cursor leaves this compact control.
+  ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+  sendRendererIntent('start_voice_input')
+}
+
+function stopVoiceInput(event?: PointerEvent) {
+  if (!isVoiceRecording.value) return
+  isVoiceRecording.value = false
+  if (event?.currentTarget instanceof HTMLElement && event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  sendRendererIntent('stop_voice_input')
 }
 </script>
 
@@ -258,10 +276,18 @@ function closeSettings() {
           <template #tooltip>{{ expanded ? '收起' : '展开' }}</template>
         </ControlButtonTooltip>
         <ControlButtonTooltip side="left">
-          <ControlButton disabled :button-style="adjustStyleClasses.button" cursor-not-allowed opacity-45>
-            <div i-ph:microphone-slash :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
+          <ControlButton
+            :button-style="adjustStyleClasses.button"
+            :aria-pressed="isVoiceRecording"
+            @pointerdown.prevent="startVoiceInput"
+            @pointerup.prevent="stopVoiceInput"
+            @pointercancel="stopVoiceInput"
+            @lostpointercapture="stopVoiceInput"
+          >
+            <div v-if="isVoiceRecording" i-ph:microphone :class="adjustStyleClasses.icon" text="primary-700 dark:primary-300" />
+            <div v-else i-ph:microphone-slash :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
           </ControlButton>
-          <template #tooltip>当前由 Python/Bridge 控制，尚未提供反向接口</template>
+          <template #tooltip>{{ isVoiceRecording ? '正在录音，松开后识别' : '按住录音，松开后识别' }}</template>
         </ControlButtonTooltip>
         <ControlButtonTooltip side="left">
           <ControlButton :button-style="adjustStyleClasses.button" cursor-move style="-webkit-app-region: drag">

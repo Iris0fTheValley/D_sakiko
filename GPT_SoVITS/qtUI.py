@@ -4427,8 +4427,15 @@ class ChatGUI(QWidget):
             except Exception:
                 logger.exception("读取 Electron UI 命令失败")
                 return
-            if isinstance(command, dict) and command.get("type") == "open_python_settings":
+            if not isinstance(command, dict):
+                continue
+            command_type = command.get("type")
+            if command_type == "open_python_settings":
                 self.open_setting_window()
+            elif command_type == "start_voice_input":
+                self.start_electron_voice_input()
+            elif command_type == "stop_voice_input":
+                self.stop_electron_voice_input()
 
     def open_setting_window(self):
         """Open the existing modal settings window at most once at a time."""
@@ -4447,6 +4454,19 @@ class ChatGUI(QWidget):
             self._refresh_send_button_state()
         finally:
             self._setting_window_open = False
+
+    def start_electron_voice_input(self) -> None:
+        """Start the existing Qt-owned press-to-talk workflow from Electron."""
+        if self.is_recording:
+            return
+        if not getattr(self, "whisper_model", None) or not self.voice_button.isEnabled():
+            self.setWindowTitle("语音输入尚未就绪")
+            return
+        self.voice_dectect()
+
+    def stop_electron_voice_input(self) -> None:
+        """Finish Electron-originated press-to-talk using the existing workflow."""
+        self.voice_decect_end()
 
     def open_more_function_window(self):
         more_function_win=MoreFunctionWindow(
