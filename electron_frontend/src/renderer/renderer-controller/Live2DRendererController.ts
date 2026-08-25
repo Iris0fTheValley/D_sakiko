@@ -115,7 +115,6 @@ export class Live2DRendererController {
       case 'set_expression': this.executeExpression(data); break
       case 'reset': this.reset(); break
       case 'reset_renderer': this.reset(); break
-      case 'bye': this.executeBye(command); break
       case 'close_renderer': try { (window as any).electronAPI?.closeWindow?.() } catch (_) { window.close() }; break
       default: break
     }
@@ -238,11 +237,6 @@ export class Live2DRendererController {
       }
       this.report({ type: 'audio_ended', event_id: command.event_id, data: { token: String(data.token || data.audio_token || ''), turn_id: data.turn_id || '', segment_id: segmentId, reason: String(error), renderer_id: this.rendererId } })
     })
-  }
-
-  private executeBye(command: RendererCommand): void {
-    this.stopAudio()
-    this.executeMotion({ ...command, type: 'motion', data: command.data })
   }
 
   private stopMotion(): void {
