@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from collections import deque
 from queue import Empty
 import time
 from uuid import uuid4
@@ -28,6 +29,7 @@ class SharedRendererHost:
         self._scheduled_tokens: dict[str, str] = {}
         self._renderer_is_sakiko = False
         self._renderer_id = ""
+        self._ready = False
         self._sakiko_conversion = owner.sakiko_conversion
         self._pending_conversion: SakikoConversionDecision | None = None
 
@@ -41,6 +43,10 @@ class SharedRendererHost:
         assert motion is not None
         self._emit(motion)
         return True
+
+    @property
+    def ready(self) -> bool:
+        return self._ready
 
     def set_thinking(self, active: bool) -> bool:
         """Accept an upstream fact; only the shared scheduler owns its timer."""
@@ -77,6 +83,7 @@ class SharedRendererHost:
                 return False
             if renderer_id:
                 self._renderer_id = renderer_id
+            self._ready = True
             motion_files = data.get("motion_files_by_group")
             expression_ids = data.get("expression_ids", ())
             if isinstance(motion_files, Mapping):
@@ -197,6 +204,7 @@ class SharedRendererService:
         self._intents = intent_queue
         self._facts = renderer_fact_queue
         self._host = SharedRendererHost(command_queue.put, owner)
+        self._pending_intents = deque()
 
     def run_once(self) -> int:
         handled = 0
@@ -211,6 +219,9 @@ class SharedRendererService:
                 intent = self._intents.get_nowait()
             except Empty:
                 break
+            self._pending_intents.append(intent)
+        while self._pending_intents and self._host.ready:
+            intent = self._pending_intents.popleft()
             if not isinstance(intent, Mapping) or intent.get("type") != "emotion_segment":
                 if isinstance(intent, Mapping) and intent.get("type") == "bye":
                     handled += int(self._host.start_bye())

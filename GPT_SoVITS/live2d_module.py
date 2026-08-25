@@ -406,7 +406,8 @@ class Live2DModule:
                     log_queue,
                     renderer_fact_queue=None,
                     renderer_command_queue=None,
-                    renderer_trace_queue=None):
+                    renderer_trace_queue=None,
+                    authoritative_emotion_audio=False):
         setup_worker_logging(log_queue)
         logger = get_logger(__name__)
 
@@ -564,6 +565,9 @@ class Live2DModule:
                 except queue.Empty:
                     break
                 if isinstance(command, dict):
+                    if command.get("type") == "close_renderer":
+                        self.run = False
+                        continue
                     if adapter.execute(command) and command.get("type") == "play_audio":
                         data = command.get("data", {})
                         if isinstance(data, dict):
@@ -1067,6 +1071,12 @@ class Live2DModule:
 
             if not emotion_queue.empty():
                 emotion = emotion_queue.get()
+                # The first authoritative cutover owns ordinary emotion/audio
+                # segments in the parent process.  Pygame still keeps its
+                # legacy bye behavior until that independent slice is moved.
+                if authoritative_emotion_audio and emotion != 'bye':
+                    logger.warning("忽略未预期的本地情感输入：%s", emotion)
+                    continue
                 if emotion=='bye':
                     self._reset_long_audio_motion_loop()
                     if not if_bye:
@@ -1237,7 +1247,7 @@ class Live2DModule:
 def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_queue, char_is_converted_queue,
                        change_char_queue, live2d_text_queue, is_display_text_value, motion_complete_value, desktop_w,
                        desktop_h, log_queue, renderer_fact_queue=None, renderer_command_queue=None,
-                       renderer_trace_queue=None):
+                       renderer_trace_queue=None, authoritative_emotion_audio=False):
     """
     Live2D 子进程入口函数
     不接收 characters 对象，而是在子进程内重新加载，避免 Windows 下 pickle 序列化截断问题
@@ -1269,7 +1279,7 @@ def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_
     live2d_player.play_live2d(emotion_queue, audio_file_path_queue, is_text_generating_queue,
                                 char_is_converted_queue, change_char_queue, live2d_text_queue, is_display_text_value,
                                 motion_complete_value, desktop_w, desktop_h, log_queue, renderer_fact_queue,
-                                renderer_command_queue, renderer_trace_queue)
+                                renderer_command_queue, renderer_trace_queue, authoritative_emotion_audio)
 
 
 

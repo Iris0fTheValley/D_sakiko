@@ -15,12 +15,14 @@ class LegacyEmotionAudioFanout:
     half of the established emotion/audio FIFO contract.
     """
 
-    def __init__(self, emotion_input, audio_input, pygame_emotions, pygame_audio, owner_intents) -> None:
+    def __init__(self, emotion_input, audio_input, pygame_emotions, pygame_audio, owner_intents,
+                 *, deliver_pygame_baseline: bool = True) -> None:
         self._emotion_input = emotion_input
         self._audio_input = audio_input
         self._pygame_emotions = pygame_emotions
         self._pygame_audio = pygame_audio
         self._owner_intents = owner_intents
+        self._deliver_pygame_baseline = deliver_pygame_baseline
         self._sequence = 0
 
     def run_once(self) -> bool:
@@ -29,15 +31,17 @@ class LegacyEmotionAudioFanout:
         except Empty:
             return False
         if emotion == "bye":
-            self._pygame_emotions.put(emotion)
+            if self._deliver_pygame_baseline:
+                self._pygame_emotions.put(emotion)
             self._owner_intents.put({"type": "bye", "data": {}})
             return True
         # This deliberate wait exactly preserves master Pygame pairing: after
         # consuming an emotion it waits for that segment's audio item.
         audio_path = self._audio_input.get()
         self._sequence += 1
-        self._pygame_audio.put(audio_path)
-        self._pygame_emotions.put(emotion)
+        if self._deliver_pygame_baseline:
+            self._pygame_audio.put(audio_path)
+            self._pygame_emotions.put(emotion)
         self._owner_intents.put({
             "type": "emotion_segment",
             "data": {

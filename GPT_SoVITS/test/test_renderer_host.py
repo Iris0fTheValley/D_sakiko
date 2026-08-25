@@ -45,6 +45,17 @@ class RendererHostTest(unittest.TestCase):
         motion = commands.get_nowait(); self.assertEqual(motion["type"], "play_motion")
         facts.put({"type":"motion_started","data":{"token":motion["data"]["token"]}})
         self.assertEqual(service.run_once(), 1); self.assertEqual(commands.get_nowait()["type"], "play_audio")
+
+    def test_service_defers_legacy_intent_until_renderer_capabilities_arrive(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner())
+        intents.put({"type":"emotion_segment","data":{"turn_id":"t","segment_id":"s","emotion":"LABEL_0","audio_path":"a.wav"}})
+        self.assertEqual(service.run_once(), 0)
+        self.assertTrue(commands.empty())
+        facts.put({"type":"renderer_ready","data":{"motion_groups":{"happiness":1}}})
+        self.assertEqual(service.run_once(), 2)
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
+
     def test_service_worker_stops_under_caller_lifecycle_control(self):
         service = SharedRendererService(Queue(), Queue(), Queue(), AuthoritativeLive2DOwner()); stop = Event()
         worker = Thread(target=service.run, args=(stop,), daemon=True); worker.start()

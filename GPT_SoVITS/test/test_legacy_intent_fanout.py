@@ -39,6 +39,18 @@ class LegacyEmotionAudioFanoutTest(unittest.TestCase):
         self.assertEqual(self.intents.get_nowait()["type"], "bye")
         self.assertEqual(self.source_audio.get_nowait(), "must-remain.wav")
 
+    def test_authoritative_cutover_stops_delivering_pygame_baseline_inputs(self):
+        fanout = LegacyEmotionAudioFanout(
+            self.source_emotion, self.source_audio, self.pygame_emotion, self.pygame_audio, self.intents,
+            deliver_pygame_baseline=False,
+        )
+        self.source_audio.put("voice.wav")
+        self.source_emotion.put("LABEL_0")
+        self.assertTrue(fanout.run_once())
+        self.assertTrue(self.pygame_emotion.empty())
+        self.assertTrue(self.pygame_audio.empty())
+        self.assertEqual(self.intents.get_nowait()["type"], "emotion_segment")
+
 
 if __name__ == "__main__":
     unittest.main()
