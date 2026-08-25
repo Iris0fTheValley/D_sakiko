@@ -42,6 +42,7 @@ from live2d_support.segment_lifecycle import SharedSegmentLifecycle
 from live2d_support.behavior_scheduler import SharedBehaviorScheduler
 from live2d_support.audio_duration import read_audio_duration_seconds
 from live2d_support.sakiko_conversion import SharedSakikoConversion
+from live2d_support.shared_segment_executor import PygameRendererCommandAdapter
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -403,7 +404,8 @@ class Live2DModule:
                     desktop_w,
                     desktop_h,
                     log_queue,
-                    renderer_fact_queue=None):
+                    renderer_fact_queue=None,
+                    renderer_command_queue=None):
         setup_worker_logging(log_queue)
         logger = get_logger(__name__)
 
@@ -535,6 +537,22 @@ class Live2DModule:
 
         emit_renderer_ready()
 
+        def emit_renderer_fact(fact: dict) -> None:
+            if renderer_fact_queue is not None:
+                renderer_fact_queue.put(fact)
+
+        def execute_shadow_renderer_commands() -> None:
+            if renderer_command_queue is None or not isinstance(model, Live2DModelAdapter):
+                return
+            adapter = PygameRendererCommandAdapter(model, emit_renderer_fact)
+            while True:
+                try:
+                    command = renderer_command_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if isinstance(command, dict):
+                    adapter.execute(command)
+
         def enter_layout_edit_mode() -> None:
             """进入 Live2D 布局编辑模式。"""
             nonlocal layout_editing, layout_dragging, layout_last_mouse_pos
@@ -593,6 +611,7 @@ class Live2DModule:
         is_update_mouth_sync = 0
         mouth_keep_open_value:float=0.0
         while self.run:
+            execute_shadow_renderer_commands()
             for event in pygame.event.get():    #退出程序逻辑
                 if event.type == pygame.QUIT:
                     if layout_editing:
@@ -1173,7 +1192,7 @@ class Live2DModule:
 
 def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_queue, char_is_converted_queue,
                        change_char_queue, live2d_text_queue, is_display_text_value, motion_complete_value, desktop_w,
-                       desktop_h, log_queue, renderer_fact_queue=None):
+                       desktop_h, log_queue, renderer_fact_queue=None, renderer_command_queue=None):
     """
     Live2D 子进程入口函数
     不接收 characters 对象，而是在子进程内重新加载，避免 Windows 下 pickle 序列化截断问题
@@ -1204,7 +1223,7 @@ def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_
     live2d_player.live2D_initialize(characters)
     live2d_player.play_live2d(emotion_queue, audio_file_path_queue, is_text_generating_queue,
                                 char_is_converted_queue, change_char_queue, live2d_text_queue, is_display_text_value,
-                                motion_complete_value, desktop_w, desktop_h, log_queue, renderer_fact_queue)
+                                motion_complete_value, desktop_w, desktop_h, log_queue, renderer_fact_queue, renderer_command_queue)
 
 
 
