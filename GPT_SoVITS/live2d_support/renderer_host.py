@@ -37,9 +37,9 @@ class SharedRendererHost:
         self._emit(motion)
         return True
 
-    def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str, audio_path: str) -> bool:
+    def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str, audio_path: str, audio_duration_seconds: float = 0.0) -> bool:
         segment = self._behavior.start_emotion_segment(
-            turn_id=turn_id, segment_id=segment_id, emotion=emotion, audio_path=audio_path,
+            turn_id=turn_id, segment_id=segment_id, emotion=emotion, audio_path=audio_path, audio_duration_seconds=audio_duration_seconds,
         )
         if segment is None:
             return False
@@ -47,6 +47,7 @@ class SharedRendererHost:
         if command is None:
             self._emit_audio(self._behavior.motion_rejected(segment.command_id), segment)
         else:
+            self._scheduler.start_segment(segment.motion.group, segment.audio_duration_seconds)
             self._emit(command)
         return True
 
@@ -55,6 +56,9 @@ class SharedRendererHost:
         if not isinstance(data, Mapping):
             return False
         if message.get("type") == "renderer_ready":
+            self._scheduled_tokens.clear()
+            self._scheduler.set_audio_busy(False)
+            self._scheduler.set_motion_over(True)
             motion_files = data.get("motion_files_by_group")
             expression_ids = data.get("expression_ids", ())
             if isinstance(motion_files, Mapping):
@@ -83,21 +87,33 @@ class SharedRendererHost:
                 return True
         active = self._behavior.active_command
         if fact == "motion_started":
+            if active is not None and token == active.command_id:
+                self._scheduler.motion_started("emotion")
             self._emit_audio(self._behavior.motion_started(token), active)
             return True
         if fact == "motion_rejected":
+            if active is not None and token == active.command_id:
+                self._scheduler.motion_finished("emotion")
             self._emit_audio(self._behavior.motion_rejected(token), active)
             return True
         if fact == "motion_finished":
+            if active is not None and token == active.command_id:
+                self._scheduler.motion_finished("emotion")
             handled = self._behavior.motion_finished(token)
             if handled and token == self._bye_token:
                 self._bye_token = ""
                 self._emit({"type": "close_renderer", "data": {"reason": "bye_motion_finished"}})
             return handled
         if fact == "audio_started":
-            return self._behavior.audio_started(token)
+            handled = self._behavior.audio_started(token)
+            if handled:
+                self._scheduler.set_audio_busy(True)
+            return handled
         if fact == "audio_ended":
-            return self._behavior.audio_ended(token)
+            handled = self._behavior.audio_ended(token)
+            if handled:
+                self._scheduler.set_audio_busy(False)
+            return handled
         if fact == "command_failed":
             self._emit_audio(
                 self._behavior.command_failed(token, str(data.get("phase") or "unknown")),
@@ -159,6 +175,7 @@ class SharedRendererService:
             handled += int(self._host.start_emotion_segment(
                 turn_id=str(data.get("turn_id", "")), segment_id=str(data.get("segment_id", "")),
                 emotion=str(data.get("emotion", "")), audio_path=str(data.get("audio_path", "")),
+                audio_duration_seconds=float(data.get("audio_duration_seconds", 0.0) or 0.0),
             ))
         handled += int(self._host.tick())
         return handled

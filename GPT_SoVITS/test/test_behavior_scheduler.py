@@ -25,6 +25,9 @@ class SchedulerTest(unittest.TestCase):
     def test_external_motion_finish_edge_starts_long_audio_delay(self):
         self.s.start_segment("happiness", 6.0); self.s.set_audio_busy(True); self.s.set_motion_over(False)
         self.s.set_motion_over(True); self.clock.value = 2.5; self.assertEqual(self.s.long_audio_due().purpose, "long_audio_repeat")
+    def test_audio_started_after_motion_finish_still_starts_long_audio_delay(self):
+        self.s.start_segment("happiness", 6.0); self.s.motion_finished("emotion"); self.s.set_audio_busy(True)
+        self.clock.value = 2.5; self.assertEqual(self.s.long_audio_due().purpose, "long_audio_repeat")
     def test_explicit_intent_is_resolved_to_exact_motion(self):
         self.s.set_catalog({"bye": 2}); command = self.s.request_motion("bye", 3, "bye")
         self.assertEqual((command.group, command.priority, command.purpose), ("bye", 3, "bye"))

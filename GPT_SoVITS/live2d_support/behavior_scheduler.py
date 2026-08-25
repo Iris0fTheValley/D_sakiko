@@ -65,6 +65,8 @@ class SharedBehaviorScheduler:
 
     def set_audio_busy(self, busy: bool) -> None:
         self._audio_busy = busy
+        if busy and self._long_enabled and self._motion_over:
+            self._long_due = self._clock() + 2.5
         if not busy:
             self._long_enabled = False
             self._long_due = None
