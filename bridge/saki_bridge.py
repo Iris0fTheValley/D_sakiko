@@ -30,14 +30,16 @@ AUDIO_PORT = 9877  # HTTP 静态文件服务端口，供 Electron 加载音频
 class Bridge:
     """简化的 Bridge 类，替代旧的 saki_launcher.py"""
 
-    def __init__(self, bridge_queue, motion_queue=None, audio_base=None, renderer_fact_queue=None):
+    def __init__(self, bridge_queue, motion_queue=None, audio_base=None, renderer_fact_queue=None, renderer_command_queue=None):
         self.bridge_q = bridge_queue
         self.motion_q = motion_queue
         self.audio_base = audio_base  # 音频文件根目录，用于 HTTP 静态服务
         self.renderer_fact_queue = renderer_fact_queue
+        self.renderer_command_queue = renderer_command_queue
         self.ws = WSServer(on_message=self._on_renderer_message)
         self._reader_thread: Optional[threading.Thread] = None
         self._motion_reader_thread: Optional[threading.Thread] = None
+        self._renderer_command_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def _on_renderer_message(self, message):
@@ -76,6 +78,11 @@ class Bridge:
                 target=self._motion_reader, daemon=True
             )
             self._motion_reader_thread.start()
+        if self.renderer_command_queue is not None:
+            self._renderer_command_reader_thread = threading.Thread(
+                target=self._renderer_command_reader, daemon=True
+            )
+            self._renderer_command_reader_thread.start()
         loop.run_forever()
 
     def _reader(self):
@@ -110,6 +117,18 @@ class Bridge:
                     asyncio.run_coroutine_threadsafe(
                         self.ws.broadcast('motion', event), loop
                     )
+
+    def _renderer_command_reader(self):
+        """Forward already-decided renderer commands without interpreting them."""
+        loop = self._loop
+        while True:
+            command = self.renderer_command_queue.get()
+            if command is None:
+                break
+            if loop is not None and isinstance(command, dict):
+                asyncio.run_coroutine_threadsafe(
+                    self.ws.broadcast('live2d_command', {'command': command}), loop
+                )
 
     async def _start_audio_server(self):
         """启动 HTTP 静态文件服务，供 Electron 加载音频文件"""
@@ -207,3 +226,5 @@ class Bridge:
         """向 reader 线程发送停止信号"""
         if self.bridge_q is not None:
             self.bridge_q.put(None)
+        if self.renderer_command_queue is not None:
+            self.renderer_command_queue.put(None)

@@ -20,6 +20,11 @@ class BridgeRuntimeFactTest(unittest.TestCase):
         asyncio.run(bridge._on_renderer_message({"v": 2, "type": "command_failed", "data": {"token": "cmd", "phase": "motion_start"}}))
         self.assertEqual(facts.get_nowait()["type"], "command_failed")
 
+    def test_renderer_command_queue_is_kept_separate_from_legacy_bridge_events(self):
+        commands = Queue()
+        bridge = Bridge(Queue(), renderer_command_queue=commands)
+        self.assertIs(bridge.renderer_command_queue, commands)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@
     "start": "electron ."
   },
   "dependencies": {
+    "@vueuse/core": "^14.1.0",
     "pixi-live2d-display": "0.4.0",
     "pixi.js": "^6.5.10",
     "reka-ui": "^2.10.0",

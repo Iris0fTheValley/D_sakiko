@@ -74,12 +74,15 @@ class SharedRendererHost:
         if fact == "audio_ended":
             return self._behavior.audio_ended(token)
         if fact == "command_failed":
-            self._behavior.command_failed(token, str(data.get("phase") or "unknown"))
+            self._emit_audio(
+                self._behavior.command_failed(token, str(data.get("phase") or "unknown")),
+                active,
+            )
             return True
         return False
 
     def _emit_audio(self, command: StartAudio | None, segment) -> None:
-        if command is not None and segment is not None:
+        if isinstance(command, StartAudio) and segment is not None:
             self._emit(audio_command(command, segment))
 
 

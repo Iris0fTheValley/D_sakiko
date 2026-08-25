@@ -23,6 +23,13 @@ class RendererHostTest(unittest.TestCase):
         token = self.out[0]["data"]["token"]
         self.assertTrue(self.host.handle_renderer_fact({"type":"command_failed","data":{"token":token,"phase":"audio_start"}}))
 
+    def test_raw_motion_start_failure_still_runs_master_audio_fallback(self):
+        self.host.start_emotion_segment(turn_id="t",segment_id="s",emotion="LABEL_0",audio_path="a.wav")
+        token = self.out[0]["data"]["token"]
+        self.assertTrue(self.host.handle_renderer_fact({"type":"command_failed","data":{"token":token,"phase":"motion_start"}}))
+        self.assertEqual(self.out[-1]["type"], "play_audio")
+        self.assertEqual(self.out[-1]["data"]["path"], "a.wav")
+
     def test_service_turns_queue_intent_and_fact_into_bridge_commands(self):
         intents, facts, commands = Queue(), Queue(), Queue()
         service = SharedRendererService(intents, facts, commands)
