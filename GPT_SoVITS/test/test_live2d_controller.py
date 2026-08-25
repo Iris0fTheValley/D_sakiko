@@ -35,7 +35,7 @@ class Live2DControllerTest(unittest.TestCase):
                     "renderer_id": renderer_id,
                     "model_token": model_token,
                     "motion_groups": self.catalog,
-                    "capabilities": {"audio": False},
+                    "capabilities": {"audio": True},
                 },
             }))
 
@@ -149,6 +149,84 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertEqual(self.controller.snapshot()["state"], before)
         with self.assertRaises(ValueError):
             self.controller.set_theme_color("blue")
+
+    def test_audio_has_one_owner_and_mouth_samples_are_fanned_out(self):
+        self.controller.start_emotion_segment(
+            turn_id="turn-audio",
+            segment_id="segment-audio",
+            emotion="happiness",
+            audio_url="http://127.0.0.1/audio/a.wav",
+            audio_duration=1.0,
+        )
+        audio = next(item for item in self.commands if item["type"] == "play_audio")
+        self.assertEqual(audio["data"]["target_renderer_id"], "window-a")
+        self.assertTrue(self.controller.handle_renderer_event({
+            "type": "mouth_amplitude",
+            "event_id": "mouth-a",
+            "session_id": "test-session",
+            "data": {
+                "renderer_id": "window-a",
+                "token": audio["data"]["token"],
+                "turn_id": "turn-audio",
+                "segment_id": "segment-audio",
+                "amplitude": 0.42,
+            },
+        }))
+        mouth = [item for item in self.commands if item["type"] == "mouth_amplitude"]
+        self.assertEqual(len(mouth), 1)
+        self.assertEqual(mouth[0]["data"]["target_renderer_ids"], ["window-a", "window-b"])
+        self.assertEqual(mouth[0]["data"]["amplitude"], 0.42)
+
+    def test_renderer_disconnect_finishes_audio_and_special_motion_is_python_selected(self):
+        self.controller.start_emotion_segment(
+            turn_id="turn-disconnect",
+            segment_id="segment-disconnect",
+            audio_url="http://127.0.0.1/audio/a.wav",
+            audio_duration=1.0,
+        )
+        self.assertIsNotNone(self.controller.snapshot()["active_audio"])
+        self.assertTrue(self.controller.handle_renderer_event({
+            "type": "renderer_disconnected",
+            "event_id": "disconnect-a",
+            "session_id": "test-session",
+            "data": {"renderer_id": "window-a"},
+        }))
+        self.assertIsNone(self.controller.snapshot()["active_audio"])
+
+        self.controller.toggle_sakiko_mask()
+        motion = [item for item in self.commands if item["type"] == "play_motion"][-1]["data"]
+        self.assertIn(motion["group"], {"change_character_maskoff", "maskon"})
+        self.assertNotIn("random", str(motion).lower())
+
+    def test_python_click_gate_is_shared_across_renderers(self):
+        first = self.controller.click_motion(event_id="click-one")
+        second = self.controller.click_motion(event_id="click-two")
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+
+    def test_stale_disconnect_does_not_remove_reconnected_renderer(self):
+        self._ready_renderer_with_connection("window-a", "connection-one", "ready-connection-one")
+        self._ready_renderer_with_connection("window-a", "connection-two", "ready-connection-two")
+        self.assertFalse(self.controller.handle_renderer_event({
+            "type": "renderer_disconnected",
+            "event_id": "stale-disconnect",
+            "session_id": "test-session",
+            "data": {"renderer_id": "window-a", "connection_id": "connection-one"},
+        }))
+        self.assertIn("window-a", self.controller.snapshot()["renderer_ids"])
+
+    def _ready_renderer_with_connection(self, renderer_id, connection_id, event_id):
+        self.assertTrue(self.controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": event_id,
+            "session_id": "test-session",
+            "data": {
+                "renderer_id": renderer_id,
+                "connection_id": connection_id,
+                "motion_groups": self.catalog,
+                "capabilities": {"audio": True},
+            },
+        }))
 
 
 if __name__ == "__main__":

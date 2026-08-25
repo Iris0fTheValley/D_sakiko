@@ -23,13 +23,29 @@ export class Live2DRendererController {
   private readonly modelToken: string
   private readonly report: RendererFactHandler
   private readonly tickerCallback: () => void
+  private readonly beforeModelUpdateCallback: () => void
   private activeMotionToken = ''
   private currentAudio: HTMLAudioElement | null = null
+  private audioOwner = false
+  private audioToken = ''
+  private audioTurnId = ''
+  private audioSegmentId = ''
   private audioContext: AudioContext | null = null
   private analyser: AnalyserNode | null = null
   private audioSource: MediaElementAudioSourceNode | null = null
   private mouthIndex = -1
   private mouthValue = 0
+  private sharedMouthValue = 0
+  private sharedMouthActive = false
+  private sharedMouthToken = ''
+  private lastMouthReportAt = 0
+  private eyeLeftIndex = -1
+  private eyeRightIndex = -1
+  private eyeTransitionStart = 0
+  private eyeTransitionFromLeft = 1
+  private eyeTransitionFromRight = 1
+  private eyeTransitionActive = false
+  private lastClickAt = -Infinity
   private started = false
   private readyData: Record<string, unknown> = {}
 
@@ -41,12 +57,14 @@ export class Live2DRendererController {
     this.modelToken = modelToken
     this.report = report
     this.tickerCallback = () => this.updateLipSync()
+    this.beforeModelUpdateCallback = () => this.applyModelOverrides()
   }
 
   start(): void {
     if (this.started) return
     this.started = true
     this.ticker.add(this.tickerCallback, undefined, 30 as any)
+    ;(this.model.internalModel as any)?.on?.('beforeModelUpdate', this.beforeModelUpdateCallback)
     this.initParameters()
   }
 
@@ -54,6 +72,7 @@ export class Live2DRendererController {
     if (!this.started) return
     this.started = false
     this.ticker.remove(this.tickerCallback, undefined)
+    ;(this.model.internalModel as any)?.off?.('beforeModelUpdate', this.beforeModelUpdateCallback)
     this.stopAudio()
     this.stopMotion()
     try { this.audioContext?.close() } catch (_) { /* best effort */ }
@@ -68,6 +87,12 @@ export class Live2DRendererController {
     this.isThinking.value = false
   }
 
+  /** Stop transport-local playback after a WS loss; Python owns lifecycle facts. */
+  abortTransportPlayback(): void {
+    this.stopAudio()
+    this.stopMotion()
+  }
+
   reportReady(): void {
     if (!this.started) return
     this.report({ type: 'renderer_ready', data: { ...this.readyData } })
@@ -80,6 +105,7 @@ export class Live2DRendererController {
       case 'play_motion': this.executeMotion({ ...command, type: 'motion', data: { ...data, motion_token: data.token } }); break
       case 'audio': this.executeAudio(command); break
       case 'play_audio': this.executeAudio({ ...command, type: 'audio', data: { ...data, audio_token: data.token } }); break
+      case 'mouth_amplitude': this.applySharedMouth(data); break
       case 'stop_audio': this.stopAudio(); break
       case 'stop_motion': this.stopMotion(); break
       case 'text': this.textBubble.value = String(data.text || ''); break
@@ -103,6 +129,9 @@ export class Live2DRendererController {
   }
 
   handleClick(clientX: number, width: number): void {
+    const now = performance.now()
+    if (now - this.lastClickAt < 200) return
+    this.lastClickAt = now
     try {
       const gaze = clientX < width / 2 ? -0.3 : 0.3
       const core = (this.model.internalModel as any)?.coreModel
@@ -122,12 +151,14 @@ export class Live2DRendererController {
       this.report({ type: 'command_failed', event_id: command.event_id, data: { reason: 'invalid_motion' } })
       return
     }
+    this.eyeTransitionActive = false
     this.stopMotion()
     this.activeMotionToken = token
     const manager = (this.model.internalModel as any)?.motionManager
     const onFinish = () => {
       if (this.activeMotionToken !== token) return
       this.activeMotionToken = ''
+      this.queueEyeOpenTransition()
       this.report({ type: 'motion_finished', event_id: command.event_id, data: { token, turn_id: data.turn_id || '', segment_id: data.segment_id || '', group, index, renderer_id: this.rendererId } })
     }
     manager?.once?.('motionFinish', onFinish)
@@ -155,24 +186,38 @@ export class Live2DRendererController {
       return
     }
     this.stopAudio()
+    this.audioOwner = data.target_renderer_id === undefined
+      || String(data.target_renderer_id || '') === this.rendererId
+    this.audioToken = String(data.token || data.audio_token || '')
+    this.audioTurnId = String(data.turn_id || '')
+    this.audioSegmentId = segmentId
     const audio = new Audio(url)
     audio.crossOrigin = 'anonymous'
     this.currentAudio = audio
     audio.addEventListener('ended', () => {
       if (this.currentAudio !== audio) return
       this.mouthValue = 0
+      this.sharedMouthValue = 0
       this.currentAudio = null
+      this.reportMouthAmplitude(0, data)
+      this.audioOwner = false
       this.report({ type: 'audio_ended', event_id: command.event_id, data: { token: String(data.token || data.audio_token || ''), turn_id: data.turn_id || '', segment_id: segmentId, renderer_id: this.rendererId } })
     })
     audio.addEventListener('error', () => {
       if (this.currentAudio !== audio) return
       this.currentAudio = null
+      this.reportMouthAmplitude(0, data)
+      this.audioOwner = false
       this.report({ type: 'audio_ended', event_id: command.event_id, data: { token: String(data.token || data.audio_token || ''), turn_id: data.turn_id || '', segment_id: segmentId, reason: 'audio_error', renderer_id: this.rendererId } })
     })
     this.setupLipSync(audio)
     audio.play().then(() => {
       this.report({ type: 'audio_started', event_id: command.event_id, data: { token: String(data.token || data.audio_token || ''), turn_id: data.turn_id || '', segment_id: segmentId, renderer_id: this.rendererId } })
     }).catch((error) => {
+      if (this.currentAudio === audio) {
+        this.reportMouthAmplitude(0, data)
+        this.audioOwner = false
+      }
       this.report({ type: 'audio_ended', event_id: command.event_id, data: { token: String(data.token || data.audio_token || ''), turn_id: data.turn_id || '', segment_id: segmentId, reason: String(error), renderer_id: this.rendererId } })
     })
   }
@@ -188,6 +233,7 @@ export class Live2DRendererController {
   }
 
   private stopAudio(): void {
+    if (this.currentAudio && this.audioOwner) this.reportMouthAmplitude(0, {})
     if (this.currentAudio) {
       this.currentAudio.pause()
       this.currentAudio.src = ''
@@ -198,12 +244,21 @@ export class Live2DRendererController {
     this.audioSource = null
     this.analyser = null
     this.mouthValue = 0
+    this.sharedMouthValue = 0
+    this.sharedMouthActive = false
+    this.sharedMouthToken = ''
+    this.audioOwner = false
+    this.audioToken = ''
+    this.audioTurnId = ''
+    this.audioSegmentId = ''
   }
 
   private initParameters(): void {
     try {
       const core = (this.model.internalModel as any)?.coreModel
       this.mouthIndex = core?.getParamIndex?.('PARAM_MOUTH_OPEN_Y') ?? -1
+      this.eyeLeftIndex = core?.getParamIndex?.('PARAM_EYE_L_OPEN') ?? -1
+      this.eyeRightIndex = core?.getParamIndex?.('PARAM_EYE_R_OPEN') ?? -1
       const internal = this.model.internalModel as any
       internal?.setAutoBlinkEnable?.(true)
       internal?.setAutoBreathEnable?.(true)
@@ -238,17 +293,70 @@ export class Live2DRendererController {
   }
 
   private updateLipSync(): void {
-    const core = (this.model.internalModel as any)?.coreModel
-    if (this.mouthIndex < 0 || !core?.setParamFloat) return
-    if (this.currentAudio && this.analyser) {
+    if (this.mouthIndex < 0) return
+    if (this.audioOwner && this.currentAudio && this.analyser) {
       const samples = new Float32Array(this.analyser.fftSize)
       this.analyser.getFloatTimeDomainData(samples)
       let power = 0
       for (const sample of samples) power += sample * sample
       this.mouthValue = Math.min(1, Math.sqrt(power / samples.length) * 2.8)
+      this.reportMouthAmplitude(this.mouthValue, {})
+    } else if (this.sharedMouthActive) {
+      this.mouthValue = this.sharedMouthValue
     } else {
       this.mouthValue *= 0.82
     }
-    core.setParamFloat(this.mouthIndex, this.mouthValue)
+  }
+
+  private reportMouthAmplitude(amplitude: number, data: Record<string, unknown>): void {
+    if (!this.audioOwner && amplitude !== 0) return
+    const now = performance.now()
+    const value = Math.max(0, Math.min(1, amplitude))
+    if (value !== 0 && now - this.lastMouthReportAt < 33) return
+    this.lastMouthReportAt = now
+    this.report({
+      type: 'mouth_amplitude',
+      data: {
+        renderer_id: this.rendererId,
+        amplitude: value,
+        token: data.token || data.audio_token || this.audioToken,
+        turn_id: data.turn_id || this.audioTurnId,
+        segment_id: data.segment_id || this.audioSegmentId,
+      },
+    })
+  }
+
+  private applySharedMouth(data: Record<string, unknown>): void {
+    const value = Number(data.amplitude)
+    if (!Number.isFinite(value)) return
+    const token = String(data.token || '')
+    if (token && this.sharedMouthToken && token !== this.sharedMouthToken && value <= 0) return
+    if (token) this.sharedMouthToken = token
+    this.sharedMouthValue = Math.max(0, Math.min(1, value))
+    this.mouthValue = this.sharedMouthValue
+    this.sharedMouthActive = this.sharedMouthValue > 0.001
+    if (!this.sharedMouthActive && token === this.sharedMouthToken) this.sharedMouthToken = ''
+  }
+
+  private queueEyeOpenTransition(): void {
+    const core = (this.model.internalModel as any)?.coreModel
+    if (!core?.getParamFloat || this.eyeLeftIndex < 0 || this.eyeRightIndex < 0) return
+    this.eyeTransitionFromLeft = Number(core.getParamFloat(this.eyeLeftIndex)) || 0
+    this.eyeTransitionFromRight = Number(core.getParamFloat(this.eyeRightIndex)) || 0
+    this.eyeTransitionStart = performance.now()
+    this.eyeTransitionActive = true
+  }
+
+  /** Runs from pixi-live2d-display's formal final-parameter lifecycle hook. */
+  private applyModelOverrides(): void {
+    const core = (this.model.internalModel as any)?.coreModel
+    if (!core?.setParamFloat) return
+    if (this.mouthIndex >= 0) core.setParamFloat(this.mouthIndex, this.mouthValue)
+    if (!this.eyeTransitionActive || this.eyeLeftIndex < 0 || this.eyeRightIndex < 0) return
+    const progress = Math.min(1, Math.max(0, (performance.now() - this.eyeTransitionStart) / 100))
+    const lerp = (from: number) => from + (1 - from) * progress
+    core.setParamFloat(this.eyeLeftIndex, lerp(this.eyeTransitionFromLeft))
+    core.setParamFloat(this.eyeRightIndex, lerp(this.eyeTransitionFromRight))
+    if (progress >= 1) this.eyeTransitionActive = false
   }
 }

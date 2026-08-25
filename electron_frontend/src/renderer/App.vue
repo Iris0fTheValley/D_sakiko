@@ -128,10 +128,9 @@ function connectWebSocket() {
   if (ws) { try { ws.onopen=null; ws.onclose=null; ws.onerror=null; ws.onmessage=null; ws.close() } catch(_){}; ws=null }
   try { ws = new WebSocket('ws://localhost:9876') } catch(e) { scheduleReconnect(); return }
   ws.onopen = () => {
-    wsConnected.value = true
-    reconnectDelay = 1000
-    rendererController.value?.reset()
-    ws?.send(JSON.stringify(createProtocolMessage('renderer_hello', {
+      wsConnected.value = true
+      reconnectDelay = 1000
+      ws?.send(JSON.stringify(createProtocolMessage('renderer_hello', {
       capabilities: ['motion', 'audio', 'lipsync', 'snapshot'],
       model_key: currentCharKey.value,
       model_token: pendingModelToken.value,
@@ -180,7 +179,12 @@ function connectWebSocket() {
       }
     } catch(e) { console.warn('[WS] Parse:', e) }
   }
-  ws.onclose = () => { wsConnected.value=false; ws=null; scheduleReconnect() }
+  ws.onclose = () => {
+    wsConnected.value = false
+    ws = null
+    rendererController.value?.abortTransportPlayback()
+    scheduleReconnect()
+  }
   ws.onerror = () => { ws?.close() }
 }
 

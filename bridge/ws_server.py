@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import struct
+import uuid
 from typing import Awaitable, Callable, Optional, Set
 
 try:
@@ -14,13 +15,21 @@ except ImportError:  # direct execution compatibility
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MessageHandler = Callable[[dict], Awaitable[None]]
+DisconnectHandler = Callable[[dict], Awaitable[None]]
 
 
 class WSServer:
-    def __init__(self, host: str = "127.0.0.1", port: int = 9876, on_message: Optional[MessageHandler] = None):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 9876,
+        on_message: Optional[MessageHandler] = None,
+        on_disconnect: Optional[DisconnectHandler] = None,
+    ):
         self.host = host
         self.port = port
         self.on_message = on_message
+        self.on_disconnect = on_disconnect
         self._clients: Set[asyncio.StreamWriter] = set()
         self._server: Optional[asyncio.AbstractServer] = None
 
@@ -34,6 +43,9 @@ class WSServer:
         return data.decode("utf-8", errors="replace")
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connection_id = uuid.uuid4().hex
+        renderer_id = ""
+        session_id = ""
         try:
             request = await asyncio.wait_for(self._read_http_request(reader), timeout=5)
             key = next((line.split(":", 1)[1].strip() for line in request.replace("\r\n", "\n").split("\n") if line.lower().startswith("sec-websocket-key:")), None)
@@ -58,6 +70,17 @@ class WSServer:
                     try:
                         message = parse_message(payload.decode("utf-8"))
                         if message is not None:
+                            if message.get("type") == "renderer_hello":
+                                data = message.setdefault("data", {})
+                                if isinstance(data, dict):
+                                    renderer_id = str(data.get("renderer_id") or "")
+                                    session_id = str(message.get("session_id") or "")
+                                    data["connection_id"] = connection_id
+                            elif renderer_id:
+                                data = message.setdefault("data", {})
+                                if isinstance(data, dict):
+                                    data.setdefault("renderer_id", renderer_id)
+                                    data["connection_id"] = connection_id
                             await self.on_message(message)
                     except Exception:
                         pass
@@ -65,6 +88,21 @@ class WSServer:
             pass
         finally:
             self._clients.discard(writer)
+            if renderer_id and self.on_disconnect is not None:
+                try:
+                    await self.on_disconnect({
+                        "v": 1,
+                        "type": "renderer_disconnected",
+                        "event_id": uuid.uuid4().hex,
+                        "session_id": session_id,
+                        "source": "bridge",
+                        "data": {
+                            "renderer_id": renderer_id,
+                            "connection_id": connection_id,
+                        },
+                    })
+                except Exception:
+                    pass
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -73,8 +111,8 @@ class WSServer:
 
     async def _read_frame(self, reader: asyncio.StreamReader):
         try:
-            header = await asyncio.wait_for(reader.readexactly(2), timeout=60)
-        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+            header = await reader.readexactly(2)
+        except asyncio.IncompleteReadError:
             return None
         opcode = header[0] & 0x0F
         masked = bool(header[1] & 0x80)

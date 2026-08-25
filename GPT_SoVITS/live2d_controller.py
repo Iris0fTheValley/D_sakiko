@@ -55,6 +55,7 @@ class BehaviorConfig:
     long_audio_repeat_delay: float = 2.5
     long_audio_max_repeats: int = 2
     model_switch_timeout: float = 30.0
+    click_throttle: float = 0.2
 
 
 @dataclass
@@ -181,6 +182,8 @@ class Live2DBehaviorController:
         self._model_transition_priority = 3
         self._model_deadline: Optional[float] = None
         self._bye_event_id = ""
+        self._sakiko_mask_on: Optional[bool] = None
+        self._last_click_at = float("-inf")
 
     # ------------------------------------------------------------------
     # Public business intents
@@ -372,9 +375,63 @@ class Live2DBehaviorController:
         cause = str(event_id or self._new_event_id())
         with self._lock:
             self._ensure_open_locked()
-            token = self._request_motion_locked("IDLE", 1, "click", cause, "", "")
+            now = self._clock()
+            if now - self._last_click_at < self._config.click_throttle:
+                token = ""
+            else:
+                self._last_click_at = now
+                token = self._request_motion_locked("IDLE", 1, "click", cause, "", "")
         self._flush()
-        return token
+        return token or None
+
+    def special_motion(
+        self,
+        groups: tuple[str, ...] | list[str],
+        *,
+        priority: int = 3,
+        purpose: str = "special",
+        turn_id: str = "",
+        event_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Choose and start one explicit special motion in the behavior layer.
+
+        Renderers only execute the resulting group/index.  In particular this
+        keeps mask transitions deterministic across multiple Electron windows.
+        """
+        cause = str(event_id or self._new_event_id())
+        with self._lock:
+            self._ensure_open_locked()
+            catalog = self._effective_catalog_locked()
+            available = [str(group) for group in groups if catalog.get(str(group), 0) > 0]
+            if not available:
+                token = ""
+            else:
+                group = self._rng.choice(available)
+                token = self._request_motion_locked(
+                    group, int(priority), str(purpose), cause, str(turn_id), ""
+                )
+        self._flush()
+        return token or None
+
+    def toggle_sakiko_mask(self, *, event_id: Optional[str] = None) -> Optional[str]:
+        """Request the next Sakiko mask transition without renderer-side RNG."""
+        cause = str(event_id or self._new_event_id())
+        with self._lock:
+            self._ensure_open_locked()
+            if self._sakiko_mask_on is True:
+                groups = ("change_character_maskoff",)
+            elif self._sakiko_mask_on is False:
+                groups = ("maskon",)
+            else:
+                groups = ("change_character_maskoff", "maskon")
+            catalog = self._effective_catalog_locked()
+            available = [group for group in groups if catalog.get(group, 0) > 0]
+            group = self._rng.choice(available) if available else ""
+            token = self._request_motion_locked(group, 3, "maskoff", cause, "", "") if group else ""
+            if token:
+                self._sakiko_mask_on = group == "change_character_maskoff"
+        self._flush()
+        return token or None
 
     def switch_model(
         self,
@@ -391,6 +448,7 @@ class Live2DBehaviorController:
             self._cancel_motion_locked("model_switch", cause)
             self._state = "switching"
             self._model = dict(model)
+            self._sakiko_mask_on = None
             raw_transition_groups = model.get("transition_groups", ("change_character",))
             if isinstance(raw_transition_groups, (list, tuple)):
                 transition_groups = tuple(
@@ -468,7 +526,7 @@ class Live2DBehaviorController:
             if msg_type == "renderer_ready":
                 handled = self._on_renderer_ready_locked(renderer_id, data)
             elif msg_type == "renderer_disconnected":
-                handled = self._on_renderer_disconnected_locked(renderer_id)
+                handled = self._on_renderer_disconnected_locked(renderer_id, data)
             elif msg_type == "motion_started":
                 handled = self._on_motion_started_locked(renderer_id, data)
             elif msg_type == "motion_finished":
@@ -477,6 +535,8 @@ class Live2DBehaviorController:
                 handled = self._on_audio_started_locked(renderer_id, data)
             elif msg_type == "audio_ended":
                 handled = self._on_audio_ended_locked(renderer_id, data)
+            elif msg_type == "mouth_amplitude":
+                handled = self._on_mouth_amplitude_locked(renderer_id, data)
             elif msg_type == "command_failed" and data.get("command_type") == "load_model":
                 handled = self._on_model_failed_locked(renderer_id, data)
             elif msg_type in {"motion_failed", "audio_failed"}:
@@ -568,14 +628,29 @@ class Live2DBehaviorController:
             return False
         catalog = self._normalize_catalog(data.get("motion_groups", {}))
         capabilities = data.get("capabilities", {})
+        previous = self._renderers.get(renderer_id)
+        connection_id = str(data.get("connection_id") or "")
+        replacement = bool(
+            previous
+            and connection_id
+            and str(previous.get("connection_id") or "")
+            and str(previous.get("connection_id")) != connection_id
+        )
+        if replacement and self._audio is not None and renderer_id in self._audio.expected_renderers:
+            # The old socket cannot produce audio_ended anymore.  End its
+            # ownership before registering the replacement socket.
+            self._audio.ended_renderers.add(renderer_id)
+            self._audio.expected_renderers.discard(renderer_id)
+            self._maybe_finish_audio_locked(reason="renderer_reconnected")
         self._renderers[renderer_id] = {
             "motion_groups": catalog,
             "capabilities": dict(capabilities) if isinstance(capabilities, Mapping) else {},
+            "connection_id": connection_id,
         }
 
         if self._state != "switching" or not self._model_token:
             motion = self._motion
-            if motion is not None and renderer_id not in motion.expected_renderers:
+            if motion is not None and (renderer_id not in motion.expected_renderers or replacement):
                 motion.expected_renderers.add(renderer_id)
                 self._queue_command_locked(
                     "play_motion",
@@ -601,8 +676,14 @@ class Live2DBehaviorController:
                 self._finish_model_switch_locked()
         return True
 
-    def _on_renderer_disconnected_locked(self, renderer_id: str) -> bool:
+    def _on_renderer_disconnected_locked(self, renderer_id: str, data: Mapping[str, Any]) -> bool:
         if renderer_id not in self._renderers:
+            return False
+        connection_id = str(data.get("connection_id") or "")
+        current_connection_id = str(self._renderers[renderer_id].get("connection_id") or "")
+        if connection_id and current_connection_id and connection_id != current_connection_id:
+            # A stale socket can close after a replacement socket has already
+            # re-registered the same renderer id.
             return False
         self._renderers.pop(renderer_id, None)
         if self._motion is not None:
@@ -614,6 +695,9 @@ class Live2DBehaviorController:
             self._audio.expected_renderers.discard(renderer_id)
             self._maybe_finish_audio_locked(reason="renderer_disconnected")
         self._model_expected.discard(renderer_id)
+        if self._state == "switching" and self._model_token and not self._model_expected:
+            self._abort_model_switch_locked("renderer_unavailable")
+            return True
         if (
             self._state == "switching"
             and self._model_token
@@ -665,6 +749,32 @@ class Live2DBehaviorController:
         self._maybe_finish_audio_locked()
         return True
 
+    def _on_mouth_amplitude_locked(self, renderer_id: str, data: Dict[str, Any]) -> bool:
+        """Fan out the audio owner's RMS sample to every renderer.
+
+        This is a renderer-local visual value, not a behavior transition.  The
+        audio owner is the only renderer allowed to produce the sample and the
+        only one that receives ``play_audio``.
+        """
+        audio = self._matching_audio_locked(data)
+        if audio is None or renderer_id not in audio.expected_renderers:
+            return False
+        try:
+            amplitude = max(0.0, min(1.0, float(data.get("amplitude", 0.0))))
+        except (TypeError, ValueError):
+            return False
+        self._queue_command_locked(
+            "mouth_amplitude",
+            {
+                "token": audio.token,
+                "turn_id": audio.turn_id,
+                "segment_id": audio.segment_id,
+                "amplitude": amplitude,
+                "target_renderer_ids": sorted(self._renderers),
+            },
+        )
+        return True
+
     def _on_renderer_failure_locked(
         self, msg_type: str, renderer_id: str, data: Dict[str, Any]
     ) -> bool:
@@ -711,6 +821,8 @@ class Live2DBehaviorController:
             self._request_motion_locked(
                 group, transition_priority, "model_switch", cause, turn_id, ""
             )
+            if str(self._model.get("variant") or "") == "dark":
+                self._sakiko_mask_on = group == "change_character"
 
     def _abort_model_switch_locked(self, reason: str) -> None:
         cause = self._model_cause_event_id or self._new_event_id()
@@ -756,6 +868,8 @@ class Live2DBehaviorController:
                 return ""
             self._motion = None  # the new token makes late facts from the old motion stale
 
+        if not self._renderers:
+            return ""
         token = self._new_token_locked("motion")
         index = self._rng.randrange(count)
         expected = set(self._renderers)
@@ -788,6 +902,8 @@ class Live2DBehaviorController:
         return token
 
     def _request_audio_locked(self, segment: _Segment) -> str:
+        if not self._renderers:
+            return ""
         audio_renderers = {
             renderer_id
             for renderer_id, info in self._renderers.items()
@@ -858,6 +974,16 @@ class Live2DBehaviorController:
         audio = self._audio
         if audio is None or not self._facts_complete(audio.expected_renderers, audio.ended_renderers):
             return
+        self._queue_command_locked(
+            "mouth_amplitude",
+            {
+                "token": audio.token,
+                "turn_id": audio.turn_id,
+                "segment_id": audio.segment_id,
+                "amplitude": 0.0,
+                "target_renderer_ids": sorted(self._renderers),
+            },
+        )
         self._audio = None
         segment = self._segment
         if (
@@ -893,6 +1019,16 @@ class Live2DBehaviorController:
         segment = self._segment
         if self._audio is not None:
             audio = self._audio
+            self._queue_command_locked(
+                "mouth_amplitude",
+                {
+                    "token": audio.token,
+                    "turn_id": audio.turn_id,
+                    "segment_id": audio.segment_id,
+                    "amplitude": 0.0,
+                    "target_renderer_ids": sorted(self._renderers),
+                },
+            )
             self._queue_command_locked(
                 "stop_audio",
                 {

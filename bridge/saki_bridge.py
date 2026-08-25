@@ -46,7 +46,7 @@ class Bridge:
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
-        self.ws = WSServer(on_message=self._on_message)
+        self.ws = WSServer(on_message=self._on_message, on_disconnect=self._on_disconnect)
         loop.run_until_complete(self.ws.start())
         if self.audio_base:
             loop.run_until_complete(self._start_audio_server())
@@ -55,6 +55,10 @@ class Bridge:
         loop.close()
 
     async def _on_message(self, message: dict) -> None:
+        self.message_queue.put(message)
+
+    async def _on_disconnect(self, message: dict) -> None:
+        """Turn transport loss into an explicit renderer lifecycle fact."""
         self.message_queue.put(message)
 
     def _read_events(self) -> None:

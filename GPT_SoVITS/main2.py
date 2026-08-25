@@ -171,7 +171,9 @@ def electron_renderer_loop() -> None:
             if model is not None:
                 electron_controller.switch_model(model)
         elif sakiko_state == "maskoff":
-            main_logger.warning("Electron 模式暂未迁移祥子面具动作；已忽略本次面具切换。")
+            # The Python behavior controller chooses the group and index once;
+            # Electron renderers only execute the resulting command.
+            electron_controller.toggle_sakiko_mask()
         try:
             message = electron_renderer_messages.get(timeout=0.05)
         except Exception:
@@ -215,6 +217,9 @@ def electron_renderer_loop() -> None:
         electron_controller.handle_renderer_event(message)
         if str(message.get("type") or "") == "renderer_ready":
             electron_renderer_ready.set()
+        elif str(message.get("type") or "") == "renderer_disconnected":
+            if not electron_controller.snapshot().get("renderer_ids"):
+                electron_renderer_ready.clear()
 
 
 def get_character_by_name(character_name: str) -> character.CharacterAttributes | None:
