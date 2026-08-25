@@ -35,6 +35,7 @@ class Live2DControllerTest(unittest.TestCase):
                     "renderer_id": renderer_id,
                     "model_token": model_token,
                     "motion_groups": self.catalog,
+                    "expression_ids": ["idle", "serious"],
                     "capabilities": {"audio": True},
                 },
             }))
@@ -84,7 +85,6 @@ class Live2DControllerTest(unittest.TestCase):
         token = self.controller.switch_model({
             "model_url": "http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json",
             "variant": "dark",
-            "initial_expression": "serious",
             "transition_groups": ["change_character", "change_character_maskoff"],
             "transition_priority": 2,
         })
@@ -92,7 +92,6 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertEqual(len(load_commands), 1)
         self.assertEqual(load_commands[0]["data"]["token"], token)
         self.assertEqual(load_commands[0]["data"]["model"]["variant"], "dark")
-        self.assertEqual(load_commands[0]["data"]["model"]["initial_expression"], "serious")
 
         self._ready_renderer("window-a", "dark-ready-a", token)
         self.assertFalse(any(item["type"] == "play_motion" for item in self.commands))
@@ -110,16 +109,36 @@ class Live2DControllerTest(unittest.TestCase):
         token = self.controller.switch_model({
             "model_url": "http://127.0.0.1:9877/model/sakiko/live2D_model/3.model.json",
             "variant": "light",
-            "initial_expression": "idle",
             "transition_groups": ["change_character"],
             "transition_priority": 2,
         })
         load = next(item for item in self.commands if item["type"] == "load_model")
-        self.assertEqual(load["data"]["model"]["initial_expression"], "idle")
         self._ready_renderer("window-a", "light-ready-a", token)
         self._ready_renderer("window-b", "light-ready-b", token)
         motion = next(item for item in self.commands if item["type"] == "play_motion")
         self.assertEqual(motion["data"]["group"], "change_character")
+
+    def test_new_renderer_receives_confirmed_model_before_commands(self):
+        token = self.controller.switch_model({
+            "model_url": "http://127.0.0.1:9877/model/sakiko/live2D_model/3.model.json",
+            "variant": "light",
+            "transition_groups": [],
+        })
+        self._ready_renderer("window-a", "restore-ready-a", token)
+        self._ready_renderer("window-b", "restore-ready-b", token)
+
+        before = len(self.commands)
+        self._ready_renderer("window-c", "restore-hello-c")
+        restore = [item for item in self.commands[before:] if item["type"] == "load_model"]
+        self.assertEqual(len(restore), 1)
+        self.assertEqual(restore[0]["data"]["target_renderer_ids"], ["window-c"])
+        restore_token = restore[0]["data"]["token"]
+
+        self._ready_renderer("window-c", "restore-ready-c", restore_token)
+        self.assertEqual(
+            len([item for item in self.commands if item["type"] == "load_model"]),
+            2,
+        )
 
     def test_model_switch_timeout_does_not_leave_controller_switching(self):
         now = [10.0]
@@ -204,6 +223,63 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIsNone(second)
 
+    def test_emotion_expression_is_selected_once_and_restored_to_idle(self):
+        self.controller.start_emotion_segment(
+            turn_id="turn-expression",
+            segment_id="segment-expression",
+            emotion="anger",
+            motion_group="happiness",
+        )
+        expression_commands = [item for item in self.commands if item["type"] == "set_expression"]
+        self.assertEqual(expression_commands[0]["data"]["expression"], "serious")
+        self.assertEqual(
+            expression_commands[0]["data"]["target_renderer_ids"],
+            ["window-a", "window-b"],
+        )
+
+        motion = next(item for item in self.commands if item["type"] == "play_motion")
+        for renderer_id in ("window-a", "window-b"):
+            self.assertTrue(self.controller.handle_renderer_event({
+                "type": "motion_finished",
+                "event_id": "expression-finished-" + renderer_id,
+                "session_id": "test-session",
+                "source": renderer_id,
+                "data": {
+                    "renderer_id": renderer_id,
+                    "token": motion["data"]["token"],
+                    "turn_id": "turn-expression",
+                    "segment_id": "segment-expression",
+                },
+            }))
+
+        expression_commands = [item for item in self.commands if item["type"] == "set_expression"]
+        self.assertEqual(expression_commands[-1]["data"]["expression"], "idle")
+
+    def test_expression_command_never_uses_unsupported_id(self):
+        commands = []
+        controller = Live2DBehaviorController(
+            commands.append,
+            motion_catalog={"happiness": 1},
+            session_id="expression-catalog-session",
+        )
+        controller.handle_renderer_event({
+            "type": "renderer_ready",
+            "event_id": "expression-catalog-ready",
+            "session_id": "expression-catalog-session",
+            "data": {
+                "renderer_id": "window-a",
+                "motion_groups": {"happiness": 1},
+                "expression_ids": ["custom_only"],
+            },
+        })
+        controller.start_emotion_segment(
+            turn_id="turn-custom-expression",
+            segment_id="segment-custom-expression",
+            emotion="happiness",
+        )
+        expression_commands = [item for item in commands if item["type"] == "set_expression"]
+        self.assertEqual(expression_commands[0]["data"]["expression"], "")
+
     def test_stale_disconnect_does_not_remove_reconnected_renderer(self):
         self._ready_renderer_with_connection("window-a", "connection-one", "ready-connection-one")
         self._ready_renderer_with_connection("window-a", "connection-two", "ready-connection-two")
@@ -224,6 +300,7 @@ class Live2DControllerTest(unittest.TestCase):
                 "renderer_id": renderer_id,
                 "connection_id": connection_id,
                 "motion_groups": self.catalog,
+                "expression_ids": ["idle", "serious"],
                 "capabilities": {"audio": True},
             },
         }))

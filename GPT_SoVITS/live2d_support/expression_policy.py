@@ -4,6 +4,11 @@ import re
 from collections.abc import Container, Iterable
 from pathlib import Path
 
+try:
+    from live2d_support.motion_semantics import motion_group_for_emotion
+except ModuleNotFoundError:  # Support importing through GPT_SoVITS in tests.
+    from GPT_SoVITS.live2d_support.motion_semantics import motion_group_for_emotion
+
 
 # 在启动一个动作时，如果 motion 文件名中包含左侧的单词，那么同时启动右侧列表中第一个存在的表情（如有）
 # 注意右侧表情永远是从左到右依次尝试使用的，不是随机的
@@ -72,6 +77,17 @@ def semantic_expression_key(value: str) -> str:
 def semantic_expression_candidates(semantic_name: str) -> tuple[str, ...] | None:
     """读取语义表情名对应的候选表情 ID。"""
     return SEMANTIC_EXPRESSION_CANDIDATES.get(semantic_expression_key(semantic_name))
+
+
+def expression_candidates_for_emotion(emotion: str) -> tuple[str, ...]:
+    """Return supported-model expression candidates for one emotion."""
+    group = motion_group_for_emotion(emotion, default="")
+    candidates = list(semantic_expression_candidates(group) or ())
+    fallback = ("serious", "idle") if group in {"sadness", "anger", "disgust", "fear"} else ("idle", "serious")
+    for candidate in fallback:
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
 
 
 def select_supported_expression(candidates: Iterable[str], supported_expression_ids: Container[str]) -> str | None:

@@ -15,7 +15,7 @@ export type RendererCommandType =
   | 'motion' | 'play_motion' | 'audio' | 'play_audio'
   | 'stop_audio' | 'stop_motion' | 'text' | 'segment_started'
   | 'user_text' | 'thinking' | 'thinking_changed' | 'reset'
-  | 'reset_renderer' | 'mouth_amplitude' | 'bye' | 'close_renderer'
+  | 'reset_renderer' | 'set_expression' | 'mouth_amplitude' | 'bye' | 'close_renderer'
 
 export interface RendererCommand {
   type: RendererCommandType

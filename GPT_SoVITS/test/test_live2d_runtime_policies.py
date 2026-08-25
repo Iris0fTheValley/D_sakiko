@@ -11,6 +11,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from live2d_support.expression_policy import (
+    expression_candidates_for_emotion,
     normalized_name_tokens,
     select_expression_for_motion,
     select_supported_expression,
@@ -89,6 +90,11 @@ class Live2DExpressionPolicyTestCase(unittest.TestCase):
 
         self.assertIsNotNone(candidates)
         self.assertEqual(candidates[0], "exp_smile02")
+
+    def test_emotion_expression_candidates_include_bundled_model_ids(self) -> None:
+        """Emotion selection can use the bundled model's serious/idle IDs."""
+        self.assertIn("idle", expression_candidates_for_emotion("LABEL_0"))
+        self.assertIn("serious", expression_candidates_for_emotion("anger"))
 
     def test_select_expression_for_motion_prefers_motion_file_token(self) -> None:
         """验证动作文件名 token 优先于动作组语义。"""

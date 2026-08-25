@@ -116,7 +116,6 @@ def resolve_electron_sakiko_model(sakiko_state: bool) -> dict[str, object] | Non
         "character_name": "祥子",
         "theme_color": character_theme_color("祥子"),
         "variant": "dark" if is_dark else "light",
-        "initial_expression": "serious" if is_dark else "idle",
         "transition_groups": (
             ["change_character", "change_character_maskoff"]
             if is_dark
@@ -221,6 +220,8 @@ def electron_renderer_loop() -> None:
             continue
         if str(message.get("type") or "") == "renderer_hello":
             data = message.get("data") if isinstance(message.get("data"), dict) else {}
+            controller_snapshot = electron_controller.snapshot()
+            needs_initial_model = not controller_snapshot.get("model") and not controller_snapshot.get("model_token")
             electron_controller.handle_renderer_event({
                 "type": "renderer_ready",
                 "event_id": message.get("event_id"),
@@ -232,6 +233,13 @@ def electron_renderer_loop() -> None:
                     "motion_groups": data.get("motion_groups", {}),
                 },
             })
+            if needs_initial_model:
+                # The renderer starts without choosing a model.  Establish the
+                # initial model from Python so the frontend is not a second
+                # source of Sakiko variant state.
+                initial_model = resolve_electron_sakiko_model(True)
+                if initial_model is not None:
+                    electron_controller.switch_model(initial_model)
             continue
         # Renderer sessions are transport sessions; controller session is the
         # authoritative behavior epoch and is attached at the process boundary.
@@ -846,12 +854,9 @@ if __name__=='__main__':
         electron_ui_commands = Queue()
         electron_controller = Live2DBehaviorController(
             electron_emit,
-            motion_catalog={
-                "happiness": 6, "sadness": 4, "anger": 7, "disgust": 2,
-                "like": 4, "surprise": 4, "fear": 2, "IDLE": 9,
-                "text_generating": 4, "bye": 2, "change_character": 3,
-                "idle_motion": 1, "talking_motion": 1,
-            },
+            # The renderer reports the active model's real motion catalog
+            # during renderer_ready; avoid a stale Python fallback table.
+            motion_catalog={},
         )
         electron_bridge = Bridge(electron_event_queue, electron_renderer_messages, project_root)
         electron_bridge.start()

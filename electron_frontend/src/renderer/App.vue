@@ -14,11 +14,10 @@ const userBubble = computed(() => rendererController.value?.userBubble.value ?? 
 const isThinking = computed(() => rendererController.value?.isThinking.value ?? false)
 
 // 模型切换（由 WS 事件驱动）
-const currentCharKey = ref('sakiko')
-// 所有模型统一走 Bridge HTTP，初始默认黑祥
-const customModelPath = ref('http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json')
+const currentCharKey = ref('')
+// 启动时不选择黑祥/白祥；Python controller 会在 renderer hello 后下发模型。
+const customModelPath = ref('')
 const pendingModelToken = ref('')
-const initialExpression = ref('serious')
 const themeColor = ref('#7799CC')
 const windowState = reactive<ElectronWindowState>({
   cursor: { x: 0, y: 0 },
@@ -75,6 +74,7 @@ onMounted(() => {
     windowState.bounds.width = next.bounds.width
     windowState.bounds.height = next.bounds.height
   })
+  connectWebSocket()
 })
 
 function toggleFadeOnHover() {
@@ -89,11 +89,10 @@ function setThemeColor(color: unknown) {
 provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
 provide('toggleFadeOnHover', toggleFadeOnHover)
 
-function reloadCustomModel(path: string, charKey?: string, expression?: string, nextThemeColor?: unknown) {
+function reloadCustomModel(path: string, charKey?: string, nextThemeColor?: unknown) {
   rendererController.value = null
   customModelPath.value = path
   if (charKey) currentCharKey.value = charKey
-  if (expression) initialExpression.value = expression
   setThemeColor(nextThemeColor)
   stageKey.value++
 }
@@ -156,7 +155,6 @@ function connectWebSocket() {
           reloadCustomModel(
             command.data.model.model_url,
             command.data.model.character_folder,
-            command.data.model.initial_expression,
             command.data.model.theme_color,
           )
           return
@@ -169,7 +167,7 @@ function connectWebSocket() {
         return
       }
       if (msg.type === 'model_switch' && msg.data?.model_url) {
-        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.initial_expression, msg.data.theme_color)
+        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.theme_color)
         return
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
@@ -218,7 +216,7 @@ onUnmounted(() => {
 <template>
   <div class="app-root">
     <div class="stage-area" :class="{ 'pointer-events-none': fadeOnHoverEnabled }" :style="{ transition: 'opacity 0.25s ease-in-out', opacity: shouldFade ? 0 : 1 }">
-      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :initial-expression="initialExpression" :renderer-id="rendererId" @renderer-controller-ready="onRendererControllerReady" @renderer-fact="onRendererFact" />
+      <Live2DStage v-if="customModelPath" :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :renderer-id="rendererId" @renderer-controller-ready="onRendererControllerReady" @renderer-fact="onRendererFact" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
     <Transition name="fade"><div v-if="userBubble" class="text-bubble user">{{ userBubble }}</div></Transition>

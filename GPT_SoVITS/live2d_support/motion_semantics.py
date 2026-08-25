@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from emotion_enum import EmotionEnum
+try:
+    from emotion_enum import EmotionEnum
+except ModuleNotFoundError:  # Support importing through GPT_SoVITS in tests.
+    from GPT_SoVITS.emotion_enum import EmotionEnum
 
 
 MotionPosition = Literal["C", "L", "R"]

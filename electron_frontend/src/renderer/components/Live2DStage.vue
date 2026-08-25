@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import type { Application, Ticker } from 'pixi.js'
 import { Live2DRendererController } from '../renderer-controller'
 
-const props = defineProps<{ modelPath?: string; modelKey?: string; modelToken?: string; initialExpression?: string; rendererId?: string }>()
+const props = defineProps<{ modelPath?: string; modelKey?: string; modelToken?: string; rendererId?: string }>()
 const emit = defineEmits<{
   rendererControllerReady: [controller: Live2DRendererController]
   rendererFact: [fact: { type: string; event_id?: string; data: Record<string, any> }]
@@ -77,12 +77,6 @@ onMounted(async () => {
     resizeObserver = new ResizeObserver(scheduleResize)
     resizeObserver.observe(canvasContainer.value!)
     app.stage.addChild(live2dModel)
-
-    // 设置初始表情
-    try {
-      const expression = props.initialExpression || (key === 'sakiko' ? 'serious' : 'idle')
-      await live2dModel.expression(expression)
-    } catch (_e) { /* expression not supported */ }
 
     // 行为选择由 Python controller 完成；renderer 只执行指定 group/index。
     controller = new Live2DRendererController(live2dModel, Ticker.shared, key, (fact) => emit('renderer-fact', {

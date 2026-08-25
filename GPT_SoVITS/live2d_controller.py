@@ -22,26 +22,21 @@ import time
 import uuid
 from typing import Any, Callable, Deque, Dict, Mapping, Optional, Set
 
+try:
+    from live2d_support.expression_policy import (
+        expression_candidates_for_emotion,
+        select_supported_expression,
+    )
+    from live2d_support.motion_semantics import motion_group_for_emotion
+except ModuleNotFoundError:  # Support importing as GPT_SoVITS.live2d_controller in tests.
+    from GPT_SoVITS.live2d_support.expression_policy import (
+        expression_candidates_for_emotion,
+        select_supported_expression,
+    )
+    from GPT_SoVITS.live2d_support.motion_semantics import motion_group_for_emotion
+
 
 PROTOCOL_VERSION = 1
-
-DEFAULT_EMOTION_GROUPS: Dict[str, str] = {
-    "LABEL_0": "happiness",
-    "LABEL_1": "sadness",
-    "LABEL_2": "anger",
-    "LABEL_3": "disgust",
-    "LABEL_4": "like",
-    "LABEL_5": "surprise",
-    "LABEL_6": "fear",
-    "happiness": "happiness",
-    "sadness": "sadness",
-    "anger": "anger",
-    "disgust": "disgust",
-    "like": "like",
-    "surprise": "surprise",
-    "fear": "fear",
-}
-
 
 @dataclass(frozen=True)
 class BehaviorConfig:
@@ -126,7 +121,6 @@ class Live2DBehaviorController:
         id_factory: Optional[Callable[[], str]] = None,
         session_id: Optional[str] = None,
         motion_catalog: Optional[Mapping[str, int]] = None,
-        emotion_groups: Optional[Mapping[str, str]] = None,
         config: Optional[BehaviorConfig] = None,
     ) -> None:
         if not callable(emit):
@@ -142,7 +136,6 @@ class Live2DBehaviorController:
         self._rng = rng or random.Random()
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
         self._config = config or BehaviorConfig()
-        self._emotion_groups = dict(emotion_groups or DEFAULT_EMOTION_GROUPS)
         self._base_catalog = self._normalize_catalog(motion_catalog or {})
 
         self._lock = threading.RLock()
@@ -184,6 +177,7 @@ class Live2DBehaviorController:
         self._bye_event_id = ""
         self._sakiko_mask_on: Optional[bool] = None
         self._last_click_at = float("-inf")
+        self._current_expression: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Public business intents
@@ -321,7 +315,7 @@ class Live2DBehaviorController:
     ) -> str:
         """Start one assistant segment and select its first motion exactly once."""
         cause = str(event_id or self._new_event_id())
-        group = str(motion_group or self._emotion_groups.get(str(emotion), ""))
+        group = str(motion_group or motion_group_for_emotion(str(emotion), default=""))
         with self._lock:
             self._ensure_open_locked()
             self._cancel_segment_locked("superseded", cause)
@@ -349,6 +343,15 @@ class Live2DBehaviorController:
                 )
             if audio_url:
                 segment.audio_token = self._request_audio_locked(segment)
+
+            # Queue this after play_motion so the SDK motion cannot overwrite
+            # the expression before the renderer applies it.
+            self._queue_expression_locked(
+                self._select_expression_for_emotion_locked(str(emotion)),
+                cause,
+                segment.turn_id,
+                segment.segment_id,
+            )
 
             self._queue_command_locked(
                 "segment_started",
@@ -642,13 +645,35 @@ class Live2DBehaviorController:
             self._audio.ended_renderers.add(renderer_id)
             self._audio.expected_renderers.discard(renderer_id)
             self._maybe_finish_audio_locked(reason="renderer_reconnected")
-        self._renderers[renderer_id] = {
+        renderer_info = {
             "motion_groups": catalog,
+            "expression_ids": self._normalize_expression_ids(data.get("expression_ids", ())),
             "capabilities": dict(capabilities) if isinstance(capabilities, Mapping) else {},
             "connection_id": connection_id,
+            "model_token": token,
         }
+        if previous and previous.get("pending_model_token"):
+            renderer_info["pending_model_token"] = previous["pending_model_token"]
+        self._renderers[renderer_id] = renderer_info
 
         if self._state != "switching" or not self._model_token:
+            pending_model_token = str(renderer_info.get("pending_model_token") or "")
+            if self._confirmed_model and not token and not pending_model_token:
+                pending_model_token = self._new_token_locked("model-restore")
+                renderer_info["pending_model_token"] = pending_model_token
+                self._queue_command_locked(
+                    "load_model",
+                    {
+                        "cause_event_id": self._model_cause_event_id or self._new_event_id(),
+                        "token": pending_model_token,
+                        "turn_id": self._model_turn_id,
+                        "model": dict(self._confirmed_model),
+                        "target_renderer_ids": [renderer_id],
+                    },
+                )
+                return True
+            if pending_model_token and token == pending_model_token:
+                renderer_info.pop("pending_model_token", None)
             motion = self._motion
             if motion is not None and (renderer_id not in motion.expected_renderers or replacement):
                 motion.expected_renderers.add(renderer_id)
@@ -665,6 +690,16 @@ class Live2DBehaviorController:
                         "purpose": motion.purpose,
                         "target_renderer_ids": [renderer_id],
                     },
+                )
+            if self._current_expression is not None:
+                # Replayed motion may reset the SDK expression, so restore it
+                # after the motion command for a renderer joining mid-segment.
+                self._queue_expression_locked(
+                    self._current_expression,
+                    self._model_cause_event_id or self._new_event_id(),
+                    self._model_turn_id,
+                    "",
+                    target_renderer_ids=[renderer_id],
                 )
             return True
         self._model_ready.add(renderer_id)
@@ -823,6 +858,7 @@ class Live2DBehaviorController:
             )
             if str(self._model.get("variant") or "") == "dark":
                 self._sakiko_mask_on = group == "change_character"
+        self._queue_expression_locked(self._default_expression_locked(), cause, turn_id, "")
 
     def _abort_model_switch_locked(self, reason: str) -> None:
         cause = self._model_cause_event_id or self._new_event_id()
@@ -999,6 +1035,12 @@ class Live2DBehaviorController:
         if segment is None or segment.completed:
             return
         segment.completed = True
+        self._queue_expression_locked(
+            self._default_expression_locked(),
+            segment.event_id,
+            segment.turn_id,
+            segment.segment_id,
+        )
         self._queue_command_locked(
             "segment_completed",
             {
@@ -1042,6 +1084,12 @@ class Live2DBehaviorController:
             )
             self._audio = None
         if segment is not None and not segment.completed:
+            self._queue_expression_locked(
+                self._default_expression_locked(),
+                cause_event_id,
+                segment.turn_id,
+                segment.segment_id,
+            )
             self._queue_command_locked(
                 "segment_cancelled",
                 {
@@ -1125,6 +1173,62 @@ class Live2DBehaviorController:
         for catalog in catalogs[1:]:
             common.intersection_update(catalog)
         return {group: min(catalog[group] for catalog in catalogs) for group in common}
+
+    def _effective_expression_ids_locked(self) -> Set[str]:
+        if not self._renderers:
+            return set()
+        catalogs = [set(info.get("expression_ids", ())) for info in self._renderers.values()]
+        if any(not catalog for catalog in catalogs):
+            return set()
+        common = set(catalogs[0])
+        for catalog in catalogs[1:]:
+            common.intersection_update(catalog)
+        return common
+
+    def _default_expression_locked(self) -> str:
+        supported = self._effective_expression_ids_locked()
+        return select_supported_expression(("idle", "serious"), supported) or ""
+
+    def _select_expression_for_emotion_locked(self, emotion: str) -> str:
+        supported = self._effective_expression_ids_locked()
+        if not supported:
+            return ""
+        return select_supported_expression(
+            expression_candidates_for_emotion(emotion),
+            supported,
+        ) or self._default_expression_locked()
+
+    def _queue_expression_locked(
+        self,
+        expression: str,
+        cause_event_id: str,
+        turn_id: str,
+        segment_id: str,
+        *,
+        target_renderer_ids: Optional[list[str]] = None,
+    ) -> None:
+        expression = str(expression or "")
+        self._current_expression = expression
+        if not self._renderers:
+            return
+        self._queue_command_locked(
+            "set_expression",
+            {
+                "cause_event_id": cause_event_id,
+                "turn_id": turn_id,
+                "segment_id": segment_id,
+                "expression": expression,
+                "target_renderer_ids": target_renderer_ids
+                if target_renderer_ids is not None
+                else sorted(self._renderers),
+            },
+        )
+
+    @staticmethod
+    def _normalize_expression_ids(value: Any) -> Set[str]:
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return set()
+        return {str(expression) for expression in value if str(expression)}
 
     @staticmethod
     def _normalize_catalog(value: Any) -> Dict[str, int]:
@@ -1257,7 +1361,6 @@ class Live2DBehaviorController:
 
 __all__ = [
     "BehaviorConfig",
-    "DEFAULT_EMOTION_GROUPS",
     "Live2DBehaviorController",
     "PROTOCOL_VERSION",
 ]

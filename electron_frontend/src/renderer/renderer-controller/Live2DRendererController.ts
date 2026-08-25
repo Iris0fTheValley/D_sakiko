@@ -45,7 +45,6 @@ export class Live2DRendererController {
   private eyeTransitionFromLeft = 1
   private eyeTransitionFromRight = 1
   private eyeTransitionActive = false
-  private lastClickAt = -Infinity
   private started = false
   private readyData: Record<string, unknown> = {}
 
@@ -113,6 +112,7 @@ export class Live2DRendererController {
       case 'user_text': this.userBubble.value = String(data.text || ''); break
       case 'thinking': this.isThinking.value = data.active === true; break
       case 'thinking_changed': this.isThinking.value = data.active === true; break
+      case 'set_expression': this.executeExpression(data); break
       case 'reset': this.reset(); break
       case 'reset_renderer': this.reset(); break
       case 'bye': this.executeBye(command); break
@@ -128,17 +128,21 @@ export class Live2DRendererController {
     if (event.type === 'text') this.textBubble.value = String(data.text || '')
   }
 
-  handleClick(clientX: number, width: number): void {
-    const now = performance.now()
-    if (now - this.lastClickAt < 200) return
-    this.lastClickAt = now
-    try {
-      const gaze = clientX < width / 2 ? -0.3 : 0.3
-      const core = (this.model.internalModel as any)?.coreModel
-      const index = core?.getParamIndex?.('PARAM_BODY_ANGLE_X')
-      if (index >= 0) core.setParamFloat(index, gaze)
-    } catch (_) { /* model may not expose this parameter */ }
+  handleClick(_clientX: number, _width: number): void {
     this.report({ type: 'renderer_intent', data: { intent: 'click' } })
+  }
+
+  private executeExpression(data: Record<string, any>): void {
+    const manager = (this.model.internalModel as any)?.motionManager?.expressionManager
+    if (!manager) return
+    const expression = String(data.expression || '')
+    if (!expression) {
+      manager.resetExpression?.()
+      return
+    }
+    Promise.resolve(manager.setExpression?.(expression)).catch((error) => {
+      console.warn('[Live2DRendererController] Expression was not applied:', expression, error)
+    })
   }
 
   private executeMotion(command: RendererCommand): void {
@@ -277,12 +281,17 @@ export class Live2DRendererController {
       for (const [group, entries] of Object.entries(definitions)) {
         if (Array.isArray(entries)) motionGroups[group] = entries.length
       }
+      const expressionDefinitions = (internal?.motionManager?.expressionManager?.definitions || []) as any[]
+      const expressionIds = expressionDefinitions
+        .map((definition) => String(definition?.name || definition?.Name || ''))
+        .filter(Boolean)
       this.readyData = {
         model_key: this.modelKey,
         renderer_id: this.rendererId,
         model_token: this.modelToken,
         capabilities: { motion: true, audio: true, lipsync: true },
         motion_groups: motionGroups,
+        expression_ids: expressionIds,
       }
     } catch (_) { /* optional SDK features */ }
   }
