@@ -38,6 +38,9 @@ const nearBorder = computed(() => {
 const rendererId = sessionStorage.getItem('live2d-renderer-id') || (() => {
   const id = crypto.randomUUID(); sessionStorage.setItem('live2d-renderer-id', id); return id
 })()
+// Stable renderer identity routes fan-out commands; this instance identity
+// changes on a page reload so the Python owner can replay conversion facts.
+const rendererInstanceId = crypto.randomUUID()
 const stageKey = ref(0)
 
 // ── 悬停淡出（airi fade-on-hover）──
@@ -99,6 +102,8 @@ function reloadCustomModel(path: string, charKey?: string, nextThemeColor?: unkn
 
 function onRendererControllerReady(controller: Live2DRendererController) {
   rendererController.value = controller
+  for (const command of pendingSnapshotCommands) controller.pushCommand(command as any)
+  pendingSnapshotCommands = []
   if (ws?.readyState === WebSocket.OPEN) controller.reportReady()
   else connectWebSocket()
 }
@@ -121,6 +126,7 @@ function createProtocolMessage(type: string, data: Record<string, any>): Protoco
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
+let pendingSnapshotCommands: Array<{ type: string; data?: Record<string, any> }> = []
 
 function connectWebSocket() {
   if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return
@@ -178,7 +184,9 @@ function connectWebSocket() {
         return
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
-        for (const command of msg.data.commands) {
+        const commands = msg.data.commands as Array<{ type: string; data?: Record<string, any> }>
+        const hasModelSwitch = commands.some((command) => command?.type === 'switch_live2d' && ((command.data || {}).model_url || (command.data || {}).electron_model_url))
+        for (const command of commands) {
           if (!command?.type) continue
           const commandData = { ...(command.data || command) }
           if (command.type === 'switch_live2d' && commandData.electron_model_url) {
@@ -187,6 +195,10 @@ function connectWebSocket() {
           if (command.type === 'switch_live2d' && commandData.model_url) {
             pendingModelToken.value = String(commandData.model_token || '')
             reloadCustomModel(String(commandData.model_url), String(commandData.character_folder || currentCharKey.value))
+            continue
+          }
+          if (hasModelSwitch || !rendererController.value) {
+            pendingSnapshotCommands.push({ ...command, data: commandData })
             continue
           }
           rendererController.value?.pushCommand({ ...command, data: commandData })
@@ -205,7 +217,7 @@ function connectWebSocket() {
 
 function onRendererFact(fact: { type: string; event_id?: string; data: Record<string, any> }) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return
-  const message = createProtocolMessage(fact.type, fact.data)
+  const message = createProtocolMessage(fact.type, { ...fact.data, renderer_instance_id: rendererInstanceId })
   ws.send(JSON.stringify(message))
 }
 

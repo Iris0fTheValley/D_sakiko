@@ -39,13 +39,12 @@ class Bridge:
         self.audio_base = audio_base  # 音频文件根目录，用于 HTTP 静态服务
         self.renderer_fact_queue = renderer_fact_queue
         self.renderer_command_queue = renderer_command_queue
-        self.ws = WSServer(on_message=self._on_renderer_message, on_connect=self._on_renderer_connect)
+        self.ws = WSServer(on_message=self._on_renderer_message)
         self._reader_thread: Optional[threading.Thread] = None
         self._renderer_command_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._snapshot_model_switch = None
         self._snapshot_thinking = None
-        self._snapshot_motions = {}
 
     async def _on_renderer_connect(self, writer):
         """Replay cached exact commands to one newly connected renderer."""
@@ -54,7 +53,6 @@ class Bridge:
             commands.append(self._untarget_command(self._snapshot_model_switch))
         if self._snapshot_thinking is not None:
             commands.append(self._untarget_command(self._snapshot_thinking))
-        commands.extend(self._untarget_command(command) for command in self._snapshot_motions.values())
         if commands:
             await self.ws.send_to(writer, 'renderer_snapshot', {'commands': commands})
 
@@ -75,20 +73,12 @@ class Bridge:
             self._snapshot_model_switch = command
         elif command_type == 'thinking_changed':
             self._snapshot_thinking = command
-        elif command_type == 'play_motion':
-            token = str((command.get('data') or {}).get('token') or '')
-            if token:
-                self._snapshot_motions[token] = command
-        elif command_type in {'stop_motion', 'reset', 'close_renderer'}:
-            self._snapshot_motions.clear()
 
-    async def _on_renderer_message(self, message):
+    async def _on_renderer_message(self, message, writer=None):
         """Forward renderer facts verbatim; the shared state consumes them."""
         if self.renderer_fact_queue is not None and isinstance(message, dict):
-            data = message.get('data') or {}
-            token = str(data.get('token') or '') if isinstance(data, dict) else ''
-            if message.get('type') in {'motion_finished', 'motion_rejected', 'command_failed'} and token:
-                self._snapshot_motions.pop(token, None)
+            if message.get('type') == 'renderer_hello' and writer is not None:
+                await self._on_renderer_connect(writer)
             self.renderer_fact_queue.put(message)
 
     def start(self):

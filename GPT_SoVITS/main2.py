@@ -382,7 +382,13 @@ def main_thread():
 
                 # tr1 是 live2d 进程变量，我们等待 live2d 进程结束，再向 Qt 窗口发送退出信息。
                 global tr1
-                tr1.join()
+                tr1.join(timeout=3)
+                if tr1.is_alive():
+                    try:
+                        tr1.terminate()
+                        tr1.join(timeout=3)
+                    except Exception:
+                        pass
 
                 QT_message_queue.put('bye')
                 break
@@ -661,9 +667,15 @@ if __name__=='__main__':
     except Exception:
         pass
     try:
-        # live2d 播放进程
-        change_char_queue.put('exit')
+        # live2d 播放进程 receives the authoritative bye through the shared
+        # command fan-out below; do not bypass the owner with a legacy exit.
         owner_intent_queue.put({"type": "bye", "data": {}})
+    except Exception:
+        pass
+    # Let the authoritative service publish the exact bye/close command before
+    # its lifecycle event is stopped. This avoids a queue scheduling race.
+    try:
+        shared_renderer_service.wait_for_bye(timeout_seconds=2.0)
     except Exception:
         pass
     owner_stop_event.set()

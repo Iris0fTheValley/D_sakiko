@@ -22,6 +22,10 @@ class WSServer:
         self.port = port
         self.on_message = on_message
         self.on_connect = on_connect
+        try:
+            self._message_accepts_writer = on_message is not None and len(inspect.signature(on_message).parameters) >= 2
+        except (TypeError, ValueError):
+            self._message_accepts_writer = False
         self._clients = set()
         self._server = None
 
@@ -91,7 +95,11 @@ class WSServer:
                 if opcode == 0x1 and self.on_message is not None:
                     try:
                         message = json.loads(payload.decode("utf-8"))
-                        result = self.on_message(message)
+                        result = (
+                            self.on_message(message, writer)
+                            if self._message_accepts_writer
+                            else self.on_message(message)
+                        )
                         if inspect.isawaitable(result):
                             await result
                     except Exception:

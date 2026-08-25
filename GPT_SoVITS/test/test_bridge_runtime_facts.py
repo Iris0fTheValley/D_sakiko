@@ -32,6 +32,19 @@ class BridgeRuntimeFactTest(unittest.TestCase):
         self.assertEqual(sent[0][0:2], ("electron-ws", "renderer_snapshot"))
         self.assertEqual(sent[0][2]["commands"][0]["data"], {"model_url": "model.json"})
 
+    def test_snapshot_does_not_cache_motion_without_owner_lifecycle_fact(self):
+        bridge = Bridge(Queue())
+        bridge._cache_command({"type": "play_motion", "data": {"token": "stale"}})
+        sent = []
+
+        class SnapshotWS:
+            async def send_to(self, writer, message_type, data):
+                sent.append(data)
+
+        bridge.ws = SnapshotWS()
+        asyncio.run(bridge._on_renderer_connect("electron-ws"))
+        self.assertEqual(sent, [])
+
     def test_renderer_fact_is_forwarded_without_controller_specific_filter(self):
         facts = Queue()
         bridge = Bridge(Queue(), renderer_fact_queue=facts)

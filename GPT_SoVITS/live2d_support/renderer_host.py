@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from collections import deque
 from copy import deepcopy
 from queue import Empty
+from threading import Event
 import time
 from uuid import uuid4
 from typing import Any
@@ -47,6 +48,8 @@ class SharedRendererHost:
         self._model_urls_by_renderer: dict[str, dict[str, str]] = {}
         self._renderer_roles: dict[str, str] = {}
         self._renderer_model_keys: dict[str, str] = {}
+        self._renderer_instances: dict[str, str] = {}
+        self._renderer_catalogs: dict[str, tuple[str, dict[str, Any], tuple[str, ...]]] = {}
 
     def start_bye(self) -> bool:
         if self._bye_requested:
@@ -129,15 +132,25 @@ class SharedRendererHost:
             return False
         if message.get("type") == "renderer_ready":
             renderer_id = str(data.get("renderer_id") or "")
+            renderer_instance_id = str(data.get("renderer_instance_id") or renderer_id or "anonymous")
             if renderer_id:
                 self._renderer_ids.add(renderer_id)
                 self._renderer_roles[renderer_id] = str(data.get("renderer_role") or "")
+                self._renderer_instances[renderer_id] = renderer_instance_id
             self._ready = True
             motion_files = data.get("motion_files_by_group")
             expression_ids = data.get("expression_ids", ())
-            if isinstance(motion_files, Mapping):
-                self._behavior.set_model_catalog(motion_files, expression_ids if isinstance(expression_ids, (list, tuple)) else ())
-                self._scheduler.set_model_catalog(motion_files, expression_ids if isinstance(expression_ids, (list, tuple)) else ())
+            normalized_expression_ids = tuple(expression_ids) if isinstance(expression_ids, (list, tuple)) else ()
+            if renderer_id:
+                if isinstance(motion_files, Mapping):
+                    self._renderer_catalogs[renderer_id] = ("files", dict(motion_files), normalized_expression_ids)
+                else:
+                    groups = data.get("motion_groups", {})
+                    self._renderer_catalogs[renderer_id] = ("groups", dict(groups) if isinstance(groups, Mapping) else {}, ())
+                self._apply_canonical_catalog()
+            elif isinstance(motion_files, Mapping):
+                self._behavior.set_model_catalog(motion_files, normalized_expression_ids)
+                self._scheduler.set_model_catalog(motion_files, normalized_expression_ids)
             else:
                 self._behavior.set_capabilities(data.get("motion_groups", {}))
                 self._scheduler.set_catalog(data.get("motion_groups", {}))
@@ -166,7 +179,10 @@ class SharedRendererHost:
                     switch = dict(self._pending_conversion_switch or {})
                     self._pending_conversion_switch = None
                     self._conversion_replay_switch = switch or None
-                    self._conversion_replay_renderers = set(self._renderer_ids)
+                    self._conversion_replay_renderers = {
+                        self._renderer_instance_key(current_id)
+                        for current_id in self._renderer_ids
+                    }
                     self._emit_conversion_motion(pending)
             elif renderer_id and self._conversion_replay_switch is not None:
                 # A renderer that joins after the conversion barrier must be
@@ -174,14 +190,15 @@ class SharedRendererHost:
                 # motion command already sent to the other renderers.
                 expected_token = str(self._conversion_replay_switch.get("model_token") or "")
                 actual_token = str(data.get("model_token") or "")
+                renderer_instance_key = self._renderer_instance_key(renderer_id)
                 if actual_token != expected_token:
                     switch = deepcopy(self._conversion_replay_switch)
                     switch["target_renderer_ids"] = [renderer_id]
                     self._emit({"type": "switch_live2d", "data": switch})
-                elif renderer_id not in self._conversion_replay_renderers and self._conversion_replay_motion is not None:
+                elif renderer_instance_key not in self._conversion_replay_renderers and self._conversion_replay_motion is not None:
                     motion = deepcopy(self._conversion_replay_motion)
                     motion.setdefault("data", {})["target_renderer_ids"] = [renderer_id]
-                    self._conversion_replay_renderers.add(renderer_id)
+                    self._conversion_replay_renderers.add(renderer_instance_key)
                     self._emit(motion)
             return True
         fact_renderer_id = str(data.get("renderer_id") or "")
@@ -338,6 +355,34 @@ class SharedRendererHost:
                 return self._renderer_model_keys.get(candidates[0], "").lower() == "sakiko"
         return self._renderer_is_sakiko
 
+    def _canonical_renderer_id(self) -> str | None:
+        for role in ("pygame", "electron"):
+            candidates = sorted(
+                renderer_id for renderer_id in self._renderer_ids
+                if self._renderer_roles.get(renderer_id) == role
+            )
+            if candidates:
+                return candidates[0]
+        return sorted(self._renderer_ids)[0] if self._renderer_ids else None
+
+    def _apply_canonical_catalog(self) -> None:
+        renderer_id = self._canonical_renderer_id()
+        if renderer_id is None:
+            return
+        catalog = self._renderer_catalogs.get(renderer_id)
+        if catalog is None:
+            return
+        kind, values, expression_ids = catalog
+        if kind == "files":
+            self._behavior.set_model_catalog(values, expression_ids)
+            self._scheduler.set_model_catalog(values, expression_ids)
+        else:
+            self._behavior.set_capabilities(values)
+            self._scheduler.set_catalog(values)
+
+    def _renderer_instance_key(self, renderer_id: str) -> str:
+        return f"{renderer_id}:{self._renderer_instances.get(renderer_id, renderer_id)}"
+
 
 class SharedRendererService:
     """Queue adapter for bridge deployments; its policy remains in the host."""
@@ -347,6 +392,7 @@ class SharedRendererService:
         self._facts = renderer_fact_queue
         self._host = SharedRendererHost(command_queue.put, owner)
         self._pending_intents = deque()
+        self._bye_handled = Event()
 
     def run_once(self) -> int:
         handled = 0
@@ -362,18 +408,38 @@ class SharedRendererService:
             except Empty:
                 break
             self._pending_intents.append(intent)
-        while self._pending_intents and self._host.ready:
-            intent = self._pending_intents.popleft()
-            if not isinstance(intent, Mapping) or intent.get("type") != "emotion_segment":
-                if isinstance(intent, Mapping) and intent.get("type") == "bye":
+        while self._pending_intents:
+            intent = self._pending_intents[0]
+            if not isinstance(intent, Mapping):
+                self._pending_intents.popleft()
+                continue
+            intent_type = intent.get("type")
+            # Emotion segments require a renderer catalog; lifecycle/control
+            # intents must still be consumed when model loading failed.
+            if intent_type == "emotion_segment" and not self._host.ready:
+                control_index = next(
+                    (index for index, candidate in enumerate(self._pending_intents)
+                     if isinstance(candidate, Mapping) and candidate.get("type") != "emotion_segment"),
+                    None,
+                )
+                if control_index is None:
+                    break
+                intent = self._pending_intents[control_index]
+                del self._pending_intents[control_index]
+                intent_type = intent.get("type")
+            else:
+                self._pending_intents.popleft()
+            if intent_type != "emotion_segment":
+                if intent_type == "bye":
                     handled += int(self._host.start_bye())
-                elif isinstance(intent, Mapping) and intent.get("type") == "thinking_changed":
+                    self._bye_handled.set()
+                elif intent_type == "thinking_changed":
                     data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.set_thinking(data.get("active") is True))
-                elif isinstance(intent, Mapping) and intent.get("type") == "sakiko_conversion":
+                elif intent_type == "sakiko_conversion":
                     data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.start_sakiko_conversion(data.get("value"), data.get("model_urls", {})))
-                elif isinstance(intent, Mapping) and intent.get("type") == "runtime_control":
+                elif intent_type == "runtime_control":
                     data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.handle_runtime_control(data))
                 continue
@@ -388,12 +454,18 @@ class SharedRendererService:
         handled += int(self._host.tick())
         return handled
 
+    def wait_for_bye(self, timeout_seconds: float = 2.0) -> bool:
+        """Wait until the queued bye intent has become an exact runtime command."""
+        return self._bye_handled.wait(max(0.0, float(timeout_seconds)))
+
     def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
         """Run until the caller's lifecycle owner requests a clean stop."""
         drain_deadline = None
         while True:
             handled = self.run_once()
             if stop_event.is_set():
+                if self._bye_handled.is_set():
+                    break
                 if drain_deadline is None:
                     drain_deadline = time.monotonic() + 2.0
                 # A shutdown intent may have been queued immediately before

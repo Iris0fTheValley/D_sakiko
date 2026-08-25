@@ -19,7 +19,7 @@ with open(os.devnull, 'w') as devnull:
 from OpenGL.GL import *
 import queue
 
-from multi_char_live2d_module import TextOverlay
+from live2d_support.text_overlay import TextOverlay
 from qconfig import d_sakiko_config
 from log import setup_worker_logging, get_logger
 from live2d_support.runtime_adapter import (
