@@ -216,7 +216,7 @@ onUnmounted(() => {
 <template>
   <div class="app-root">
     <div class="stage-area" :class="{ 'pointer-events-none': fadeOnHoverEnabled }" :style="{ transition: 'opacity 0.25s ease-in-out', opacity: shouldFade ? 0 : 1 }">
-      <Live2DStage v-if="customModelPath" :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :renderer-id="rendererId" @renderer-controller-ready="onRendererControllerReady" @renderer-fact="onRendererFact" />
+      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :renderer-id="rendererId" @renderer-controller-ready="onRendererControllerReady" @renderer-fact="onRendererFact" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
     <Transition name="fade"><div v-if="userBubble" class="text-bubble user">{{ userBubble }}</div></Transition>

@@ -6,6 +6,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
+    "test:cold-start": "node scripts/test-cold-start.mjs",
     "start": "electron ."
   },
   "dependencies": {
