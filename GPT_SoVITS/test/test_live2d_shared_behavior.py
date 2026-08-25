@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+from random import Random
+
+script_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+from live2d_support.shared_behavior import SharedLive2DBehavior
+
+
+class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.behavior = SharedLive2DBehavior(rng=Random(7))
+        self.behavior.set_capabilities({"happiness": 3, "sadness": 1})
+
+    def test_emotion_decision_is_exact_and_audio_projection_follows_facts(self) -> None:
+        command = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0",
+            audio_path="answer.wav", audio_duration_seconds=2.0,
+        )
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertEqual(command.motion.group, "happiness")
+        self.assertIn(command.motion.index, range(3))
+        self.assertEqual((command.motion.priority, command.motion.position), (3, "C"))
+        self.assertTrue(self.behavior.legacy_motion_complete)
+        self.assertTrue(self.behavior.motion_started(command.command_id))
+        self.assertTrue(self.behavior.audio_started(command.command_id))
+        self.assertFalse(self.behavior.legacy_motion_complete)
+        self.assertTrue(self.behavior.motion_finished(command.command_id))
+        self.assertFalse(self.behavior.legacy_motion_complete)
+        self.assertTrue(self.behavior.audio_ended(command.command_id))
+        self.assertTrue(self.behavior.legacy_motion_complete)
+
+    def test_motion_rejection_preserves_pygame_audio_fallback(self) -> None:
+        command = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        assert command is not None
+        self.assertTrue(self.behavior.motion_rejected(command.command_id))
+        self.assertTrue(self.behavior.audio_started(command.command_id))
+        self.assertFalse(self.behavior.legacy_motion_complete)
+        self.assertTrue(self.behavior.audio_ended(command.command_id))
+        self.assertTrue(self.behavior.legacy_motion_complete)
+
+    def test_unknown_emotion_has_no_command(self) -> None:
+        self.assertIsNone(self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="unknown", audio_path="left-queued.wav",
+        ))
+
+    def test_failure_and_stale_facts_cannot_leave_segment_busy(self) -> None:
+        command = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        assert command is not None
+        self.assertFalse(self.behavior.audio_started("stale"))
+        self.assertTrue(self.behavior.command_failed(command.command_id, "audio_start"))
+        self.assertTrue(self.behavior.legacy_motion_complete)
+        self.assertIsNone(self.behavior.active_command)
+
+
+if __name__ == "__main__":
+    unittest.main()
