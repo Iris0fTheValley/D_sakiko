@@ -402,7 +402,8 @@ class Live2DModule:
                     motion_complete_value,
                     desktop_w,
                     desktop_h,
-                    log_queue):
+                    log_queue,
+                    renderer_fact_queue=None):
         setup_worker_logging(log_queue)
         logger = get_logger(__name__)
 
@@ -516,6 +517,23 @@ class Live2DModule:
         def restore_normal_overlay() -> None:
             """退出布局编辑后恢复普通对话文本。"""
             overlay.set_text(self.current_character.character_name, self.new_text or "...")
+
+        def emit_renderer_ready() -> None:
+            """Shadow transport fact; does not change legacy Pygame decisions."""
+            if renderer_fact_queue is None or not isinstance(model, Live2DModelAdapter):
+                return
+            renderer_fact_queue.put({
+                "type": "renderer_ready",
+                "data": {
+                    "renderer_id": "pygame-renderer",
+                    "model_key": self.current_character.character_folder_name,
+                    "motion_files_by_group": model.motion_files_by_group,
+                    "expression_ids": list(model.expression_ids),
+                    "capabilities": {"motion": True, "audio": True, "lipsync": True},
+                },
+            })
+
+        emit_renderer_ready()
 
         def enter_layout_edit_mode() -> None:
             """进入 Live2D 布局编辑模式。"""
@@ -1155,7 +1173,7 @@ class Live2DModule:
 
 def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_queue, char_is_converted_queue,
                        change_char_queue, live2d_text_queue, is_display_text_value, motion_complete_value, desktop_w,
-                       desktop_h, log_queue):
+                       desktop_h, log_queue, renderer_fact_queue=None):
     """
     Live2D 子进程入口函数
     不接收 characters 对象，而是在子进程内重新加载，避免 Windows 下 pickle 序列化截断问题
@@ -1186,7 +1204,7 @@ def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_
     live2d_player.live2D_initialize(characters)
     live2d_player.play_live2d(emotion_queue, audio_file_path_queue, is_text_generating_queue,
                                 char_is_converted_queue, change_char_queue, live2d_text_queue, is_display_text_value,
-                                motion_complete_value, desktop_w, desktop_h, log_queue)
+                                motion_complete_value, desktop_w, desktop_h, log_queue, renderer_fact_queue)
 
 
 
