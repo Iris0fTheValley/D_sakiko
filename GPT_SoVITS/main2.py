@@ -26,6 +26,8 @@ from chat.chat import get_chat_manager
 from live2d_support.authoritative_owner import AuthoritativeLive2DOwner
 from live2d_support.legacy_intent_fanout import LegacyEmotionAudioFanout
 from live2d_support.renderer_host import SharedRendererService
+from live2d_support.runtime_ingress import ThinkingStateQueue, LegacyControlIntentFanout, FanoutQueue
+from bridge.saki_bridge import Bridge
 
 from emotion_enum import EmotionEnum
 from log import setup_logging, get_logger, get_log_queue, setup_worker_logging, shutdown_logging
@@ -375,6 +377,7 @@ def main_thread():
 
             if this_turn_response=='bye':
                 emotion_queue.put('bye')    #退出live2D进程
+                owner_intent_queue.put({"type": "bye", "data": {}})
                 dp2qt_queue.put("（再见）")
                 audio_gen.shutdown_worker()
 
@@ -504,6 +507,8 @@ if __name__=='__main__':
     owner_intent_queue=multiprocessing.Queue()
     renderer_fact_queue=multiprocessing.Queue()
     pygame_renderer_command_queue=multiprocessing.Queue()
+    pygame_runtime_control_queue=multiprocessing.Queue()
+    pygame_legacy_conversion_queue=multiprocessing.Queue()
     owner_stop_event=threading.Event()
     authoritative_owner=AuthoritativeLive2DOwner()
     legacy_intent_fanout=LegacyEmotionAudioFanout(
@@ -511,16 +516,29 @@ if __name__=='__main__':
         pygame_emotion_queue, pygame_audio_file_path_queue, owner_intent_queue,
         deliver_pygame_baseline=False,
     )
+    electron_bridge_queue=Queue()
+    electron_renderer_command_queue=Queue()
+    electron_bridge=Bridge(
+        electron_bridge_queue,
+        audio_base=project_root,
+        renderer_fact_queue=renderer_fact_queue,
+        renderer_command_queue=electron_renderer_command_queue,
+    )
     shared_renderer_service=SharedRendererService(
-        owner_intent_queue, renderer_fact_queue, pygame_renderer_command_queue, authoritative_owner,
+        owner_intent_queue, renderer_fact_queue,
+        FanoutQueue(pygame_renderer_command_queue, electron_renderer_command_queue), authoritative_owner,
     )
     is_audio_play_complete=Queue()
-    is_text_generating_queue=multiprocessing.Queue()
+    thinking_item_count=multiprocessing.Value('i', 0)
+    is_text_generating_queue=ThinkingStateQueue(multiprocessing.Queue(), owner_intent_queue, thinking_item_count)
     dp2qt_queue=Queue()
     qt2dp_queue=Queue()
     QT_message_queue=Queue()
     char_is_converted_queue=multiprocessing.Queue()
     change_char_queue=multiprocessing.Queue()
+    control_intent_fanout=LegacyControlIntentFanout(
+        change_char_queue, char_is_converted_queue, owner_intent_queue, pygame_runtime_control_queue,
+    )
     # Live2D 跨进程通信
     live2d_text_queue=multiprocessing.Queue()  # 用于传递要显示的文本
     is_display_text_value=multiprocessing.Value('b', True)  # 是否显示文本
@@ -585,7 +603,7 @@ if __name__=='__main__':
     # 在 MacOS 下，所有的 NSWindow（Qt 窗口）只能在独立进程中创建，不可以在子线程中创建窗口。
     # 由于 live2d 模块会创建一个窗口，我们必须使用多进程而非多线程实现并行。
     main_logger.info("加载Live2D界面中...")
-    tr1=multiprocessing.Process(target=live2d_module.run_live2d_process,args=(pygame_emotion_queue,pygame_audio_file_path_queue,is_text_generating_queue,char_is_converted_queue,change_char_queue,live2d_text_queue,is_display_text_value,motion_complete_value, desktop_w, desktop_h, get_log_queue(),renderer_fact_queue,pygame_renderer_command_queue,None,True))
+    tr1=multiprocessing.Process(target=live2d_module.run_live2d_process,args=(pygame_emotion_queue,pygame_audio_file_path_queue,is_text_generating_queue,pygame_legacy_conversion_queue,pygame_runtime_control_queue,live2d_text_queue,is_display_text_value,motion_complete_value, desktop_w, desktop_h, get_log_queue(),renderer_fact_queue,pygame_renderer_command_queue,None,True))
     # LLM 生成模块（该模块为不同线程）
     tr2=threading.Thread(target=dp_chat.text_generator,args=(text_queue,
                                                              is_audio_play_complete,
@@ -602,7 +620,9 @@ if __name__=='__main__':
     tr4 = UpdateConfigThread("d_sakiko_config")
     tr4.reload_requested.connect(d_sakiko_config.reload_from_disk)
     tr1.start()
+    electron_bridge.start()
     threading.Thread(target=legacy_intent_fanout.run, args=(owner_stop_event,), daemon=True).start()
+    threading.Thread(target=control_intent_fanout.run, args=(owner_stop_event,), daemon=True).start()
     threading.Thread(target=shared_renderer_service.run, args=(owner_stop_event,), daemon=True).start()
     tr2.start()
     tr3.start()
@@ -645,9 +665,11 @@ if __name__=='__main__':
         # live2d 播放进程
         change_char_queue.put('exit')
         emotion_queue.put('bye')
+        owner_intent_queue.put({"type": "bye", "data": {}})
     except Exception:
         pass
     owner_stop_event.set()
+    electron_bridge.shutdown()
     try:
         # 主窗口
         QT_message_queue.put('bye')

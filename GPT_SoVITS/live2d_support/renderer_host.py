@@ -26,14 +26,24 @@ class SharedRendererHost:
         self._behavior = owner.behavior
         self._scheduler = owner.scheduler
         self._bye_token = ""
+        self._bye_requested = False
         self._scheduled_tokens: dict[str, str] = {}
         self._renderer_is_sakiko = False
-        self._renderer_id = ""
+        self._renderer_ids: set[str] = set()
         self._ready = False
         self._sakiko_conversion = owner.sakiko_conversion
         self._pending_conversion: SakikoConversionDecision | None = None
+        self._pending_conversion_model_token = ""
+        self._pending_conversion_renderers: set[str] = set()
+        self._pending_conversion_switch: dict[str, Any] | None = None
+        self._model_urls: dict[str, str] = {}
+        self._model_urls_by_renderer: dict[str, dict[str, str]] = {}
+        self._renderer_roles: dict[str, str] = {}
 
     def start_bye(self) -> bool:
+        if self._bye_requested:
+            return False
+        self._bye_requested = True
         command = self._behavior.start_named_motion(turn_id="", segment_id="", group="bye", priority=3)
         if command is None:
             self._emit({"type": "close_renderer", "data": {"reason": "bye_motion_unavailable"}})
@@ -41,6 +51,8 @@ class SharedRendererHost:
         self._bye_token = command.command_id
         motion = motion_command(command)
         assert motion is not None
+        if self._renderer_ids:
+            motion.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
         self._emit(motion)
         return True
 
@@ -54,6 +66,38 @@ class SharedRendererHost:
         self._emit({"type": "thinking_changed", "data": {"active": active}})
         return True
 
+    def handle_runtime_control(self, data: Mapping[str, Any]) -> bool:
+        """Route legacy UI controls through the owner, preserving mechanics-only renderers."""
+        command_type = str(data.get("type") or "")
+        if command_type == "start_talking":
+            return self._emit_scheduled(self._scheduler.request_motion("talking_motion", 4, "talking"))
+        if command_type == "stop_talking":
+            self._emit({"type": "stop_motion", "data": {}})
+            return True
+        if command_type == "cancel_turn":
+            self._behavior.cancel()
+            self._emit({"type": "stop_audio", "data": {}})
+            self._emit({"type": "stop_motion", "data": {}})
+            self._emit({"type": "reset", "data": {}})
+            return True
+        if command_type == "exit":
+            return self.start_bye()
+        if command_type in {"change_l2d_background", "switch_l2d_fps", "toggle_l2d_layout_edit"}:
+            self._emit({"type": command_type, "data": dict(data)})
+            return True
+        if command_type == "switch_live2d":
+            payload = dict(data)
+            payload.pop("type", None)
+            model_path = str(payload.get("model_json") or payload.get("model_url") or "")
+            if model_path and "electron_model_url" not in payload:
+                marker = "live2d_related"
+                if marker in model_path.replace("\\", "/"):
+                    relative = model_path.replace("\\", "/").split(marker, 1)[1].lstrip("/")
+                    payload["electron_model_url"] = f"http://127.0.0.1:9877/model/{relative}"
+            self._emit({"type": "switch_live2d", "data": payload})
+            return True
+        return False
+
     def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str, audio_path: str, audio_duration_seconds: float = 0.0) -> bool:
         segment = self._behavior.start_emotion_segment(
             turn_id=turn_id, segment_id=segment_id, emotion=emotion, audio_path=audio_path, audio_duration_seconds=audio_duration_seconds,
@@ -65,7 +109,10 @@ class SharedRendererHost:
             self._emit_audio(self._behavior.motion_rejected(segment.command_id), segment)
         else:
             self._scheduler.start_segment(segment.motion.group, segment.audio_duration_seconds)
-            self._emit(command)
+            command_payload = command
+            if self._renderer_ids:
+                command_payload.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
+            self._emit(command_payload)
         return True
 
     def handle_renderer_fact(self, message: Mapping[str, Any]) -> bool:
@@ -74,15 +121,9 @@ class SharedRendererHost:
             return False
         if message.get("type") == "renderer_ready":
             renderer_id = str(data.get("renderer_id") or "")
-            # A reconnect is a capability refresh, not an audio/motion-idle
-            # fact.  In particular, it must not silently complete an active
-            # segment.  A host instance accepts one selected renderer only;
-            # facts from another renderer are stale unless a later lifecycle
-            # owner creates a new host for that renderer session.
-            if self._renderer_id and renderer_id and renderer_id != self._renderer_id:
-                return False
             if renderer_id:
-                self._renderer_id = renderer_id
+                self._renderer_ids.add(renderer_id)
+                self._renderer_roles[renderer_id] = str(data.get("renderer_role") or "")
             self._ready = True
             motion_files = data.get("motion_files_by_group")
             expression_ids = data.get("expression_ids", ())
@@ -93,12 +134,29 @@ class SharedRendererHost:
                 self._behavior.set_capabilities(data.get("motion_groups", {}))
                 self._scheduler.set_catalog(data.get("motion_groups", {}))
             self._renderer_is_sakiko = str(data.get("model_key", "")).lower() == "sakiko"
-            if self._pending_conversion is not None:
-                pending, self._pending_conversion = self._pending_conversion, None
-                self._emit_conversion_motion(pending)
+            urls = data.get("model_urls")
+            if isinstance(urls, Mapping):
+                normalized_urls = {str(key): str(value) for key, value in urls.items() if value}
+                self._model_urls_by_renderer[renderer_id] = normalized_urls
+                self._model_urls = normalized_urls
+            if self._pending_conversion is not None and renderer_id:
+                expected_token = self._pending_conversion_model_token
+                actual_token = str(data.get("model_token") or "")
+                if expected_token and actual_token != expected_token and self._pending_conversion_renderers:
+                    self._pending_conversion_renderers.add(renderer_id)
+                    switch = dict(self._pending_conversion_switch or {})
+                    switch["target_renderer_ids"] = [renderer_id]
+                    self._emit({"type": "switch_live2d", "data": switch})
+                else:
+                    self._pending_conversion_renderers.discard(renderer_id)
+                if not self._pending_conversion_renderers:
+                    pending, self._pending_conversion = self._pending_conversion, None
+                    self._pending_conversion_model_token = ""
+                    self._pending_conversion_switch = None
+                    self._emit_conversion_motion(pending)
             return True
         fact_renderer_id = str(data.get("renderer_id") or "")
-        if self._renderer_id and fact_renderer_id and fact_renderer_id != self._renderer_id:
+        if self._renderer_ids and fact_renderer_id and fact_renderer_id not in self._renderer_ids:
             return False
         if message.get("type") == "renderer_intent" and data.get("intent") == "click":
             command = self._scheduler.click(is_sakiko=self._renderer_is_sakiko)
@@ -158,11 +216,30 @@ class SharedRendererHost:
         decision = self._sakiko_conversion.decide(conversion)
         if decision.model_target == "current":
             return self._emit_conversion_motion(decision)
-        model_url = str(model_urls.get(decision.model_target, ""))
+        pygame_urls = next(
+            (urls for renderer_id, urls in self._model_urls_by_renderer.items()
+             if self._renderer_roles.get(renderer_id) == "pygame"),
+            {},
+        )
+        candidates = model_urls if isinstance(model_urls, Mapping) and model_urls else (pygame_urls or self._model_urls)
+        model_url = str(candidates.get(decision.model_target, ""))
         if not model_url:
             return False
         self._pending_conversion = decision
-        self._emit({"type": "switch_live2d", "data": {"model_url": model_url, "character_folder": "sakiko"}})
+        self._pending_conversion_model_token = uuid4().hex
+        self._pending_conversion_renderers = set(self._renderer_ids)
+        electron_urls = next(
+            (urls for renderer_id, urls in self._model_urls_by_renderer.items()
+             if self._renderer_roles.get(renderer_id) == "electron"),
+            {},
+        )
+        self._pending_conversion_switch = {
+            "model_url": model_url,
+            "electron_model_url": electron_urls.get(decision.model_target, model_url),
+            "character_folder": "sakiko",
+            "model_token": self._pending_conversion_model_token,
+        }
+        self._emit({"type": "switch_live2d", "data": dict(self._pending_conversion_switch)})
         return True
 
     def _emit_conversion_motion(self, decision: SakikoConversionDecision) -> bool:
@@ -189,12 +266,17 @@ class SharedRendererHost:
         self._scheduled_tokens[token] = scheduled.purpose
         motion = motion_command(command)
         assert motion is not None
+        if self._renderer_ids:
+            motion.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
         self._emit(motion)
         return True
 
     def _emit_audio(self, command: StartAudio | None, segment) -> None:
         if isinstance(command, StartAudio) and segment is not None:
-            self._emit(audio_command(command, segment))
+            payload = audio_command(command, segment)
+            if self._renderer_ids:
+                payload.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
+            self._emit(payload)
 
 
 class SharedRendererService:
@@ -231,6 +313,9 @@ class SharedRendererService:
                 elif isinstance(intent, Mapping) and intent.get("type") == "sakiko_conversion":
                     data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.start_sakiko_conversion(data.get("value"), data.get("model_urls", {})))
+                elif isinstance(intent, Mapping) and intent.get("type") == "runtime_control":
+                    data = intent.get("data", {})
+                    handled += int(isinstance(data, Mapping) and self._host.handle_runtime_control(data))
                 continue
             data = intent.get("data", {})
             if not isinstance(data, Mapping):

@@ -7,9 +7,8 @@ export type RendererFactHandler = (fact: RendererFact) => void
 
 /**
  * Electron-side command executor.
- * Behaviour decisions (idle, thinking, emotion, random index and sequencing)
- * belong to the Python Live2DBehaviorController. This class owns SDK, audio
- * and DOM state and reports lifecycle facts back to that controller.
+ * Behaviour decisions belong to the shared Python owner. This class owns SDK,
+ * audio and DOM state and reports lifecycle facts back to that owner.
  */
 export class Live2DRendererController {
   readonly textBubble: Ref<string | null> = ref(null)
@@ -289,13 +288,18 @@ export class Live2DRendererController {
         .filter(Boolean)
       this.readyData = {
         model_key: this.modelKey,
+        renderer_role: 'electron',
         renderer_id: this.rendererId,
         model_token: this.modelToken,
         capabilities: { motion: true, audio: true, lipsync: true },
         motion_groups: motionGroups,
-        motion_files_by_group: motionFilesByGroup,
-        expression_ids: expressionIds,
-      }
+      motion_files_by_group: motionFilesByGroup,
+      expression_ids: expressionIds,
+      model_urls: {
+        white: 'http://127.0.0.1:9877/model/sakiko/live2D_model/3.model.json',
+        black: 'http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json',
+      },
+    }
     } catch (_) { /* optional SDK features */ }
   }
 

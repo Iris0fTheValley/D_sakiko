@@ -10,7 +10,7 @@ export interface ProtocolMessage {
   data: Record<string, any>
 }
 
-/** Commands decided by Live2DBehaviorController and executed by Electron. */
+/** Commands decided by the shared authoritative owner and executed by Electron. */
 export type RendererCommandType =
   | 'motion' | 'play_motion' | 'audio' | 'play_audio'
   | 'stop_audio' | 'stop_motion' | 'text' | 'segment_started'

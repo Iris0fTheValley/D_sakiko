@@ -83,6 +83,22 @@ class RendererHostTest(unittest.TestCase):
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"sakiko","motion_groups":{"change_character":1}}})
         self.assertEqual((self.out[-1]["type"],self.out[-1]["data"]["group"],self.out[-1]["data"]["priority"]), ("play_motion","change_character",2))
 
+    def test_late_renderer_is_replayed_into_pending_conversion(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(1)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":"old","model_urls":{"white":"white.model.json"},"motion_groups":{"change_character":1}}})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white":"white.model.json"}))
+        switch = self.out[-1]
+        token = switch["data"]["model_token"]
+        self.assertEqual(switch["type"], "switch_live2d")
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"late-electron","renderer_role":"electron","model_token":"old","motion_groups":{"change_character":1}}})
+        replay = self.out[-1]
+        self.assertEqual(replay["type"], "switch_live2d")
+        self.assertEqual(replay["data"]["target_renderer_ids"], ["late-electron"])
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":token,"motion_groups":{"change_character":1}}})
+        self.assertEqual(self.out[-1]["type"], "switch_live2d")
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"late-electron","renderer_role":"electron","model_token":token,"motion_groups":{"change_character":1}}})
+        self.assertEqual(self.out[-1]["type"], "play_motion")
+
     def test_reconnect_ready_does_not_reset_an_active_segment(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","motion_groups":{"happiness":1}}})
         self.assertTrue(self.host.start_emotion_segment(turn_id="t", segment_id="s", emotion="LABEL_0", audio_path="a.wav"))
@@ -91,9 +107,23 @@ class RendererHostTest(unittest.TestCase):
         self.host.handle_renderer_fact({"type":"motion_started","data":{"renderer_id":"pygame","token":token}})
         self.assertEqual(self.out[-1]["type"], "play_audio")
 
-    def test_stale_renderer_facts_are_rejected_after_renderer_selection(self):
+    def test_multiple_renderers_share_one_owner_and_receive_fanout_commands(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","motion_groups":{"happiness":1}}})
-        self.assertFalse(self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"electron","motion_groups":{"happiness":1}}}))
-        self.assertFalse(self.host.handle_renderer_fact({"type":"motion_finished","data":{"renderer_id":"electron","token":"stale"}}))
+        self.assertTrue(self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"electron","motion_groups":{"happiness":1}}}))
+        self.assertTrue(self.host.start_emotion_segment(turn_id="t", segment_id="s", emotion="LABEL_0", audio_path="a.wav"))
+        self.assertEqual(self.out[-1]["data"]["target_renderer_ids"], ["electron", "pygame"])
+
+    def test_conversion_waits_for_every_renderer_with_matching_model_token(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(1)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":"old","model_urls":{"white":"pygame-white.model.json"},"motion_groups":{"change_character":1}}})
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"random-electron-id","renderer_role":"electron","model_token":"old","model_urls":{"white":"http://127.0.0.1:9877/model/sakiko/live2D_model/3.model.json"},"motion_groups":{"change_character":1}}})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white":"pygame-white.model.json"}))
+        switch = self.out[-1]
+        self.assertEqual(switch["data"]["electron_model_url"], "http://127.0.0.1:9877/model/sakiko/live2D_model/3.model.json")
+        token = switch["data"]["model_token"]
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":token,"motion_groups":{"change_character":1}}})
+        self.assertEqual(self.out[-1]["type"], "switch_live2d")
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"random-electron-id","renderer_role":"electron","model_token":token,"motion_groups":{"change_character":1}}})
+        self.assertEqual(self.out[-1]["type"], "play_motion")
 
 if __name__ == '__main__': unittest.main()

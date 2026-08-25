@@ -45,6 +45,22 @@ arbitration、timer、segment sequencing，以及 `main2.py` 中 Electron 专有
 
 ## 已知风险与验证要求
 
+## 完成后的运行拓扑
+
+生产启动由 `main2.py` 创建一个 `AuthoritativeLive2DOwner` 和一个
+`SharedRendererService`。情感、thinking、控制、cancel、bye、Sakiko
+conversion 等 legacy ingress 都先进入 owner intent queue；service 将 owner
+决定的 exact command fan-out 到 Pygame command queue 和 Electron Bridge。
+Pygame 只加载模型、执行 SDK/窗口/音频/口型和布局 mechanics，并回传
+renderer facts；Electron renderer 复用现有 Pixi/WebAudio/lip-sync controller
+执行同一 exact command 并回传 facts。`motion_complete_value` 仍由 Pygame
+实际 mixer busy 状态投影，保持上游兼容语义。
+
+Pygame 模块不再创建 behavior/scheduler/conversion 实例，也不再读取输入
+队列来选择动作；旧 emotion/audio 参数仅作为兼容签名保留。多 renderer
+ready facts 绑定到同一 host，command 使用 `target_renderer_ids` fan-out，
+因此同一业务事件只经过一次 owner 决策。
+
 1. Pygame 的 SDK random 与旧 Controller 的 Python `randrange` 不能假定等价；共享层须基于 capability 输入给出 exact group/index。
 2. Electron `command_failed` 与 Controller 接收的 `motion_failed/audio_failed` 不一致，可能让 segment 永久等待；迁移时统一为带 token/turn/segment 的 failure fact。
 3. Renderer ready/capability 不能在 WebSocket 未连接时丢失。

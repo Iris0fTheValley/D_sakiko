@@ -187,6 +187,15 @@ class SharedLive2DBehavior:
         self._active_command = None
         return True
 
+    def cancel(self) -> bool:
+        """Cancel the active command without making a renderer-side decision."""
+        had_active = self._active_command is not None
+        self._active_command = None
+        self._motion_active = False
+        self._audio_active = False
+        self._audio_start_dispatched = False
+        return had_active
+
     def _matches(self, command_id: str) -> bool:
         return self._active_command is not None and self._active_command.command_id == command_id
 

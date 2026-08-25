@@ -1,4 +1,4 @@
-"""Mirror legacy emotion/audio input into a Pygame baseline and owner shadow."""
+"""Route legacy emotion/audio input into the single authoritative owner."""
 from __future__ import annotations
 
 from queue import Empty
@@ -8,11 +8,10 @@ from live2d_support.audio_duration import read_audio_duration_seconds
 
 
 class LegacyEmotionAudioFanout:
-    """Consume each legacy pair once, then publish identical ordered inputs.
+    """Consume each legacy pair once and publish one ordered owner intent.
 
-    During shadow mode Pygame still owns the visible baseline.  The shared
-    owner receives an independent copy so it cannot race Pygame for either
-    half of the established emotion/audio FIFO contract.
+    The optional Pygame queues remain only for callers that have not completed
+    migration; the production startup disables that compatibility delivery.
     """
 
     def __init__(self, emotion_input, audio_input, pygame_emotions, pygame_audio, owner_intents,

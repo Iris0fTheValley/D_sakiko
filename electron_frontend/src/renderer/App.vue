@@ -159,7 +159,18 @@ function connectWebSocket() {
           setThemeColor(command.data?.theme_color)
           return
         }
-        if (command?.type) rendererController.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
+        if (command?.type) {
+          const commandData = { ...(command.data || command) }
+          if (command.type === 'switch_live2d' && commandData.electron_model_url) {
+            commandData.model_url = commandData.electron_model_url
+          }
+          if (command.type === 'switch_live2d' && commandData.model_url) {
+            pendingModelToken.value = String(commandData.model_token || '')
+            reloadCustomModel(String(commandData.model_url), String(commandData.character_folder || currentCharKey.value))
+            return
+          }
+          rendererController.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: commandData })
+        }
         return
       }
       if (msg.type === 'model_switch' && msg.data?.model_url) {
