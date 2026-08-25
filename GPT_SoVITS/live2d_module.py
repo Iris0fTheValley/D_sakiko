@@ -405,7 +405,8 @@ class Live2DModule:
                     desktop_h,
                     log_queue,
                     renderer_fact_queue=None,
-                    renderer_command_queue=None):
+                    renderer_command_queue=None,
+                    renderer_trace_queue=None):
         setup_worker_logging(log_queue)
         logger = get_logger(__name__)
 
@@ -541,6 +542,10 @@ class Live2DModule:
             if renderer_fact_queue is not None:
                 renderer_fact_queue.put(fact)
 
+        def emit_renderer_trace(trace: dict) -> None:
+            if renderer_trace_queue is not None:
+                renderer_trace_queue.put(trace)
+
         renderer_audio_token = ""
         renderer_audio_was_busy = False
 
@@ -626,6 +631,7 @@ class Live2DModule:
 
         interval_think=1
         if_bye = False
+        baseline_emotion_sequence = 0
         last_emotion = None
         logger.info("当前Live2D界面渲染硬件 %s", glGetString(GL_RENDERER).decode())
 
@@ -1095,6 +1101,9 @@ class Live2DModule:
                     continue
 
                 this_turn_audio_file_path=audio_file_queue.get()
+                # Match the owner-shadow relay's FIFO sequence even when this
+                # legacy baseline skips an unsupported emotion label.
+                baseline_emotion_sequence += 1
                 motion_group = motion_group_for_emotion(str(emotion), default="")
                 if not motion_group:
                     logger.warning("忽略未知情感标签：%s", emotion)
@@ -1107,7 +1116,7 @@ class Live2DModule:
                     )
                     shared_command = shared_behavior.start_emotion_segment(
                         turn_id="pygame-shadow",
-                        segment_id=str(emotion),
+                        segment_id=str(baseline_emotion_sequence),
                         emotion=str(emotion),
                         audio_path=this_turn_audio_file_path,
                     )
@@ -1118,6 +1127,19 @@ class Live2DModule:
                             motion_group,
                         )
                     else:
+                        motion = shared_command.motion
+                        if motion is not None:
+                            emit_renderer_trace({
+                                "type": "baseline_emotion_motion",
+                                "data": {
+                                    "segment_id": shared_command.segment_id,
+                                    "group": motion.group,
+                                    "index": motion.index,
+                                    "priority": motion.priority,
+                                    "position": motion.position,
+                                    "expression_id": motion.expression_id,
+                                },
+                            })
                         def on_shared_segment_fact(fact, command_id):
                             if fact == "motion_finished":
                                 shared_segment_lifecycle.consume_motion_fact(fact, command_id)
@@ -1214,7 +1236,8 @@ class Live2DModule:
 
 def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_queue, char_is_converted_queue,
                        change_char_queue, live2d_text_queue, is_display_text_value, motion_complete_value, desktop_w,
-                       desktop_h, log_queue, renderer_fact_queue=None, renderer_command_queue=None):
+                       desktop_h, log_queue, renderer_fact_queue=None, renderer_command_queue=None,
+                       renderer_trace_queue=None):
     """
     Live2D 子进程入口函数
     不接收 characters 对象，而是在子进程内重新加载，避免 Windows 下 pickle 序列化截断问题
@@ -1245,7 +1268,8 @@ def run_live2d_process(emotion_queue, audio_file_path_queue, is_text_generating_
     live2d_player.live2D_initialize(characters)
     live2d_player.play_live2d(emotion_queue, audio_file_path_queue, is_text_generating_queue,
                                 char_is_converted_queue, change_char_queue, live2d_text_queue, is_display_text_value,
-                                motion_complete_value, desktop_w, desktop_h, log_queue, renderer_fact_queue, renderer_command_queue)
+                                motion_complete_value, desktop_w, desktop_h, log_queue, renderer_fact_queue,
+                                renderer_command_queue, renderer_trace_queue)
 
 
 
