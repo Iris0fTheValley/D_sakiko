@@ -41,6 +41,7 @@ from live2d_support.shared_segment_executor import PygameScheduledMotionExecutor
 from live2d_support.segment_lifecycle import SharedSegmentLifecycle
 from live2d_support.behavior_scheduler import SharedBehaviorScheduler
 from live2d_support.audio_duration import read_audio_duration_seconds
+from live2d_support.sakiko_conversion import SharedSakikoConversion
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -444,6 +445,7 @@ class Live2DModule:
             lambda audio: self.onStartCallback_emotion_version(audio.audio_path),
         )
         shared_scheduler = SharedBehaviorScheduler(clock=time.time)
+        shared_sakiko_conversion = SharedSakikoConversion()
         if self.PATH_JSON is not None:
             try:
                 current_runtime_version = detect_live2d_runtime_version(self.PATH_JSON)
@@ -945,6 +947,7 @@ class Live2DModule:
                         logger.warning("当前没有可用的 Live2D V2 模型，跳过祥子黑白模型特殊切换。")
                         continue
                     if conv_index!='maskoff':
+                        conversion_decision = shared_sakiko_conversion.decide(conv_index)
                         if not conv_index:      #切换为白祥
                             if self.PATH_JSON is None:
                                 logger.warning("祥子默认 Live2D 模型未配置，跳过特殊模型切换。")
@@ -958,9 +961,9 @@ class Live2DModule:
                             current_layout = get_live2d_layout(current_layout_model_path, model.version, layout_scene)
                             apply_current_layout()
                             shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
-                            expression = shared_scheduler.resolve_semantic_expression("idle")
+                            expression = shared_scheduler.resolve_semantic_expression(conversion_decision.semantic_expression or "idle")
                             if expression is not None: model.set_expression_if_supported(expression)
-                            command = shared_scheduler.request_motion("change_character", 2, "sakiko_white")
+                            command = shared_scheduler.request_motion(conversion_decision.motion_group, conversion_decision.priority, conversion_decision.purpose)
                             if command is not None: PygameScheduledMotionExecutor(model).execute(command, self.onStartCallback, self.onFinishCallback)
                             self.sakiko_state=False
 
@@ -979,21 +982,22 @@ class Live2DModule:
                             apply_current_layout()
 
                             shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
-                            self.if_mask = shared_scheduler.choose_mask_initial_state()
-                            expression = shared_scheduler.resolve_semantic_expression("serious")
+                            self.if_mask = shared_sakiko_conversion.mask_on
+                            expression = shared_scheduler.resolve_semantic_expression(conversion_decision.semantic_expression or "serious")
                             if expression is not None: model.set_expression_if_supported(expression)
-                            command = shared_scheduler.request_motion("change_character" if self.if_mask else "change_character_maskoff", 2, "sakiko_black")
+                            command = shared_scheduler.request_motion(conversion_decision.motion_group, conversion_decision.priority, conversion_decision.purpose)
                             if command is not None: PygameScheduledMotionExecutor(model).execute(command, self.onStartCallback, self.onFinishCallback)
                             self.sakiko_state=True
                     else:
+                        conversion_decision = shared_sakiko_conversion.decide(conv_index)
                         if self.sakiko_state:   #黑祥
                             shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
-                            command = shared_scheduler.request_motion("change_character_maskoff" if self.if_mask else "maskon", 3, "sakiko_mask_toggle")
+                            command = shared_scheduler.request_motion(conversion_decision.motion_group, conversion_decision.priority, conversion_decision.purpose)
                             if command is not None: PygameScheduledMotionExecutor(model).execute(command, self.onStartCallback, self.onFinishCallback)
-                            self.if_mask = not self.if_mask
+                            self.if_mask = shared_sakiko_conversion.mask_on
                         else:
                             shared_scheduler.set_model_catalog(model.motion_files_by_group, model.expression_ids)
-                            command = shared_scheduler.request_fixed_motion("text_generating", 0, 3, "sakiko_white_toggle")
+                            command = shared_scheduler.request_fixed_motion(conversion_decision.motion_group, conversion_decision.fixed_index or 0, conversion_decision.priority, conversion_decision.purpose)
                             if command is not None: PygameScheduledMotionExecutor(model).execute(command, self.onStartCallback, self.onFinishCallback)
 
             if not emotion_queue.empty():
