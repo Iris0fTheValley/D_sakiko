@@ -42,7 +42,10 @@ onMounted(async () => {
   })
 
   try {
-    const modelSrc = props.modelPath || '/live2d/sakiko/live2D_model/3.model.json'
+    // The packaged Electron renderer is loaded from file://.  Keep the
+    // bootstrap model relative to dist/renderer so it works before Bridge
+    // sends Python's authoritative load_model command.
+    const modelSrc = props.modelPath || './live2d/sakiko/live2D_model/3.model.json'
     const key = props.modelKey || 'sakiko'
     const live2dModel = await Live2DModel.from(modelSrc, { autoInteract: false })
 
