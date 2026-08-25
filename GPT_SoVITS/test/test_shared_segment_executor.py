@@ -75,6 +75,15 @@ class PygameSharedSegmentExecutorTestCase(unittest.TestCase):
         self.assertEqual(runtime.calls, [("expression", "exp_smile01"), ("motion", "IDLE_C", 1, 1, None, False)])
         self.assertEqual([fact["type"] for fact in facts], ["motion_started", "motion_finished"])
 
+    def test_contract_adapter_starts_exact_audio_and_reports_failure(self) -> None:
+        runtime, facts, started = FakeRuntime(True), [], []
+        adapter = PygameRendererCommandAdapter(runtime, facts.append, lambda path: started.append(path) is None)
+        self.assertTrue(adapter.execute({"type":"play_audio","data":{"token":"t","path":"a.wav"}}))
+        self.assertEqual(started, ["a.wav"])
+        self.assertEqual(facts, [{"type":"audio_started","data":{"token":"t"}}])
+        self.assertFalse(PygameRendererCommandAdapter(runtime, facts.append).execute({"type":"play_audio","data":{"token":"t","path":"a.wav"}}))
+        self.assertEqual(facts[-1]["data"]["phase"], "audio_start")
+
 
 if __name__ == "__main__":
     unittest.main()

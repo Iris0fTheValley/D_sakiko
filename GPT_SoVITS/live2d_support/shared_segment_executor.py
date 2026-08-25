@@ -69,12 +69,16 @@ class PygameScheduledMotionExecutor:
 class PygameRendererCommandAdapter:
     """Execute only exact owner commands and return mechanical lifecycle facts."""
 
-    def __init__(self, runtime: ExactMotionRuntime, emit_fact: Callable[[dict], None]) -> None:
-        self._runtime, self._emit_fact = runtime, emit_fact
+    def __init__(self, runtime: ExactMotionRuntime, emit_fact: Callable[[dict], None],
+                 start_audio: Callable[[str], bool] | None = None) -> None:
+        self._runtime, self._emit_fact, self._start_audio = runtime, emit_fact, start_audio
 
     def execute(self, command: Mapping[str, object]) -> bool:
         data = command.get("data")
-        if command.get("type") != "play_motion" or not isinstance(data, Mapping): return False
+        if not isinstance(data, Mapping): return False
+        if command.get("type") == "play_audio":
+            return self._execute_audio(data)
+        if command.get("type") != "play_motion": return False
         token, group, index = str(data.get("token") or ""), str(data.get("group") or ""), data.get("index")
         if not token or not group or not isinstance(index, int):
             self._emit_fact({"type":"command_failed","data":{"token":token,"phase":"motion_start"}}); return False
@@ -85,3 +89,11 @@ class PygameRendererCommandAdapter:
         ok = self._runtime.StartMotion(group, index, int(data.get("priority", 3)), started, finished, position=None, auto_expression=False)
         if not ok: self._emit_fact({"type":"command_failed","data":{"token":token,"phase":"motion_start"}})
         return ok
+
+    def _execute_audio(self, data: Mapping[str, object]) -> bool:
+        token, path = str(data.get("token") or ""), str(data.get("path") or "")
+        if not token or not path or self._start_audio is None or not self._start_audio(path):
+            self._emit_fact({"type": "command_failed", "data": {"token": token, "phase": "audio_start"}})
+            return False
+        self._emit_fact({"type": "audio_started", "data": {"token": token}})
+        return True

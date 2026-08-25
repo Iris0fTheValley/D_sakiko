@@ -541,17 +541,38 @@ class Live2DModule:
             if renderer_fact_queue is not None:
                 renderer_fact_queue.put(fact)
 
+        renderer_audio_token = ""
+        renderer_audio_was_busy = False
+
         def execute_shadow_renderer_commands() -> None:
+            nonlocal renderer_audio_token
             if renderer_command_queue is None or not isinstance(model, Live2DModelAdapter):
                 return
-            adapter = PygameRendererCommandAdapter(model, emit_renderer_fact)
+            adapter = PygameRendererCommandAdapter(
+                model,
+                emit_renderer_fact,
+                self.onStartCallback_emotion_version,
+            )
             while True:
                 try:
                     command = renderer_command_queue.get_nowait()
                 except queue.Empty:
                     break
                 if isinstance(command, dict):
-                    adapter.execute(command)
+                    if adapter.execute(command) and command.get("type") == "play_audio":
+                        data = command.get("data", {})
+                        if isinstance(data, dict):
+                            renderer_audio_token = str(data.get("token") or "")
+
+        def emit_shadow_audio_idle_fact() -> None:
+            nonlocal renderer_audio_was_busy, renderer_audio_token
+            if not renderer_audio_token:
+                return
+            is_busy = pygame.mixer.music.get_busy()
+            if renderer_audio_was_busy and not is_busy:
+                emit_renderer_fact({"type": "audio_ended", "data": {"token": renderer_audio_token}})
+                renderer_audio_token = ""
+            renderer_audio_was_busy = is_busy
 
         def enter_layout_edit_mode() -> None:
             """进入 Live2D 布局编辑模式。"""
@@ -612,6 +633,7 @@ class Live2DModule:
         mouth_keep_open_value:float=0.0
         while self.run:
             execute_shadow_renderer_commands()
+            emit_shadow_audio_idle_fact()
             for event in pygame.event.get():    #退出程序逻辑
                 if event.type == pygame.QUIT:
                     if layout_editing:
