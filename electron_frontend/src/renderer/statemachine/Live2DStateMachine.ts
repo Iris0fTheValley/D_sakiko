@@ -20,6 +20,7 @@ export class Live2DStateMachine {
   private readonly ticker: Ticker
   private readonly modelKey: string
   private readonly rendererId: string
+  private readonly modelToken: string
   private readonly report: RendererFactHandler
   private readonly tickerCallback: () => void
   private activeMotionToken = ''
@@ -30,12 +31,14 @@ export class Live2DStateMachine {
   private mouthIndex = -1
   private mouthValue = 0
   private started = false
+  private readyData: Record<string, unknown> = {}
 
-  constructor(model: Live2DModel, ticker: Ticker, modelKey: string, report: RendererFactHandler, rendererId = modelKey) {
+  constructor(model: Live2DModel, ticker: Ticker, modelKey: string, report: RendererFactHandler, rendererId = modelKey, modelToken = '') {
     this.model = model
     this.ticker = ticker
     this.modelKey = modelKey
     this.rendererId = rendererId
+    this.modelToken = modelToken
     this.report = report
     this.tickerCallback = () => this.updateLipSync()
   }
@@ -63,6 +66,11 @@ export class Live2DStateMachine {
     this.textBubble.value = null
     this.userBubble.value = null
     this.isThinking.value = false
+  }
+
+  reportReady(): void {
+    if (!this.started) return
+    this.report({ type: 'renderer_ready', data: { ...this.readyData } })
   }
 
   pushCommand(command: RendererCommand): void {
@@ -204,15 +212,13 @@ export class Live2DStateMachine {
       for (const [group, entries] of Object.entries(definitions)) {
         if (Array.isArray(entries)) motionGroups[group] = entries.length
       }
-      this.report({
-        type: 'renderer_ready',
-        data: {
-          model_key: this.modelKey,
-          renderer_id: this.rendererId,
-          capabilities: { motion: true, audio: true, lipsync: true },
-          motion_groups: motionGroups,
-        },
-      })
+      this.readyData = {
+        model_key: this.modelKey,
+        renderer_id: this.rendererId,
+        model_token: this.modelToken,
+        capabilities: { motion: true, audio: true, lipsync: true },
+        motion_groups: motionGroups,
+      }
     } catch (_) { /* optional SDK features */ }
   }
 

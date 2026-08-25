@@ -59,6 +59,9 @@ ELECTRON_RENDERER = resolve_renderer_mode() == "electron"
 electron_controller = None
 electron_bridge = None
 electron_renderer_messages = None
+electron_ui_commands = None
+electron_change_char_queue = None
+electron_char_is_converted_queue = None
 electron_renderer_ready = threading.Event()
 electron_segment_events: dict[str, threading.Event] = {}
 electron_segment_events_lock = threading.Lock()
@@ -86,8 +89,44 @@ def electron_audio_url(audio_path: str) -> str:
     return "http://127.0.0.1:9877/audio/" + relative
 
 
+def electron_model_url(model_json: str) -> tuple[str, str]:
+    """Resolve one project model path into its Bridge URL and absolute path."""
+    model_path = os.path.abspath(os.path.join(script_dir, str(model_json)))
+    model_relative = os.path.relpath(model_path, project_root).replace(os.sep, "/")
+    if model_relative.startswith("live2d_related/"):
+        model_relative = model_relative[len("live2d_related/"):]
+    return "http://127.0.0.1:9877/model/" + model_relative, model_path
+
+
+def resolve_electron_sakiko_model(sakiko_state: bool) -> dict[str, object] | None:
+    """Build the authoritative renderer descriptor for light/dark Sakiko."""
+    is_dark = bool(sakiko_state)
+    model_json = (
+        "../live2d_related/sakiko/live2D_model_costume/3.model.json"
+        if is_dark
+        else "../live2d_related/sakiko/live2D_model/3.model.json"
+    )
+    model_url, model_path = electron_model_url(model_json)
+    if not os.path.isfile(model_path):
+        main_logger.error("祥子 Live2D 模型不存在，取消黑白切换：%s", model_path)
+        return None
+    return {
+        "model_url": model_url,
+        "character_folder": "sakiko",
+        "character_name": "祥子",
+        "variant": "dark" if is_dark else "light",
+        "initial_expression": "serious" if is_dark else "idle",
+        "transition_groups": (
+            ["change_character", "change_character_maskoff"]
+            if is_dark
+            else ["change_character"]
+        ),
+        "transition_priority": 2,
+    }
+
+
 def electron_renderer_loop() -> None:
-    """Feed renderer lifecycle facts into the one shared controller and tick it."""
+    """Feed renderer facts into the shared controller and forward UI requests."""
     global electron_controller
     next_tick = time.monotonic()
     while electron_controller is not None:
@@ -96,7 +135,7 @@ def electron_renderer_loop() -> None:
             electron_controller.tick()
             next_tick = now + 0.05
         try:
-            ui_command = change_char_queue.get_nowait()
+            ui_command = electron_change_char_queue.get_nowait()
         except Exception:
             ui_command = None
         if isinstance(ui_command, dict):
@@ -105,11 +144,7 @@ def electron_renderer_loop() -> None:
                 electron_controller.reset()
             elif command_type == "switch_live2d":
                 model_json = str(ui_command.get("model_json") or "")
-                model_path = os.path.abspath(os.path.join(script_dir, model_json))
-                model_relative = os.path.relpath(model_path, project_root).replace(os.sep, "/")
-                if model_relative.startswith("live2d_related/"):
-                    model_relative = model_relative[len("live2d_related/"):]
-                model_url = "http://127.0.0.1:9877/model/" + model_relative
+                model_url, model_path = electron_model_url(model_json)
                 if not os.path.isfile(model_path):
                     model_url = str(ui_command.get("model_url") or model_url)
                 electron_controller.switch_model({
@@ -117,6 +152,19 @@ def electron_renderer_loop() -> None:
                     "character_folder": str(ui_command.get("character_folder_name") or ""),
                     "character_name": str(ui_command.get("character_name") or ""),
                 })
+        # The old Pygame renderer consumed this queue directly.  Electron is
+        # now the only renderer, so the shared controller must consume the
+        # same business event and choose the model transition once here.
+        try:
+            sakiko_state = electron_char_is_converted_queue.get_nowait()
+        except Exception:
+            sakiko_state = None
+        if sakiko_state is True or sakiko_state is False:
+            model = resolve_electron_sakiko_model(sakiko_state)
+            if model is not None:
+                electron_controller.switch_model(model)
+        elif sakiko_state == "maskoff":
+            main_logger.warning("Electron 模式暂未迁移祥子面具动作；已忽略本次面具切换。")
         try:
             message = electron_renderer_messages.get(timeout=0.05)
         except Exception:
@@ -144,6 +192,12 @@ def electron_renderer_loop() -> None:
             data = message.get("data") if isinstance(message.get("data"), dict) else {}
             if data.get("intent") == "click":
                 electron_controller.click_motion(event_id=str(message.get("event_id") or ""))
+            elif data.get("intent") == "open_python_settings":
+                # This thread is owned by Bridge, not Qt.  Keep the request on a
+                # dedicated in-process queue so ChatGUI can consume it from the
+                # QApplication thread without touching legacy Pygame queues.
+                if electron_ui_commands is not None:
+                    electron_ui_commands.put({"type": "open_python_settings"})
             continue
         electron_controller.handle_renderer_event(message)
         if str(message.get("type") or "") == "renderer_ready":
@@ -711,6 +765,8 @@ if __name__=='__main__':
     QT_message_queue=Queue()
     char_is_converted_queue=multiprocessing.Queue()
     change_char_queue=multiprocessing.Queue()
+    electron_char_is_converted_queue = char_is_converted_queue
+    electron_change_char_queue = change_char_queue
     # Live2D 跨进程通信
     live2d_text_queue=multiprocessing.Queue()  # 用于传递要显示的文本
     is_display_text_value=multiprocessing.Value('b', True)  # 是否显示文本
@@ -722,6 +778,7 @@ if __name__=='__main__':
 
         electron_event_queue = Queue()
         electron_renderer_messages = Queue()
+        electron_ui_commands = Queue()
         electron_controller = Live2DBehaviorController(
             electron_emit,
             motion_catalog={
@@ -825,7 +882,8 @@ if __name__=='__main__':
                           audio_gen=audio_gen, live2d_text_queue=live2d_text_queue,
                           is_display_text_value=is_display_text_value, motion_complete_value=motion_complete_value,
                           emotion_queue=emotion_queue, audio_file_path_queue=audio_file_path_queue,
-                          change_char_queue=change_char_queue)
+                          change_char_queue=change_char_queue,
+                          electron_ui_command_queue=electron_ui_commands)
 
     font_id = QFontDatabase.addApplicationFont(os.path.abspath(font_path))  # 设置字体
     # font_id = -1 表示 Qt 无法加载给定的字体。此时，不设置程序的字体。

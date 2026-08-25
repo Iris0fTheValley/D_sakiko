@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import type { Application, Ticker } from 'pixi.js'
 import { Live2DStateMachine } from '../statemachine'
 
-const props = defineProps<{ modelPath?: string; modelKey?: string; modelToken?: string; rendererId?: string }>()
+const props = defineProps<{ modelPath?: string; modelKey?: string; modelToken?: string; initialExpression?: string; rendererId?: string }>()
 const emit = defineEmits<{
   stateMachineReady: [sm: Live2DStateMachine]
   rendererFact: [fact: { type: string; event_id?: string; data: Record<string, any> }]
@@ -12,6 +12,7 @@ const emit = defineEmits<{
 const canvasContainer = ref<HTMLDivElement>()
 let app: Application | null = null
 let sm: Live2DStateMachine | null = null
+let resizeObserver: ResizeObserver | null = null
 
 function onCanvasClick(e: MouseEvent) {
   if (sm && canvasContainer.value) {
@@ -44,36 +45,59 @@ onMounted(async () => {
     const key = props.modelKey || 'sakiko'
     const live2dModel = await Live2DModel.from(modelSrc, { autoInteract: false })
 
-    // 调整位置和大小
-    live2dModel.scale.set(0.3)
+    // Electron 默认窗口尺寸是 450x600。这个基准必须在换模时保持稳定；
+    // 如果把当前窗口尺寸当作基准，窗口缩小后换模会把模型缩放重置回 0.3。
+    // 窗口尺寸改变和模型重载都通过同一公式计算，确保换模不会改变视觉比例。
+    const baseScale = 0.3
+    const referenceWidth = 450
+    const referenceHeight = 600
+    const resizeModel = () => {
+      if (!app || !canvasContainer.value) return
+      const width = Math.max(1, canvasContainer.value.clientWidth)
+      const height = Math.max(1, canvasContainer.value.clientHeight)
+      app.renderer.resize(width, height)
+      const ratio = Math.min(width / referenceWidth, height / referenceHeight)
+      live2dModel.scale.set(baseScale * ratio)
+      live2dModel.x = width / 2
+      live2dModel.y = height / 2
+    }
     live2dModel.anchor.set(0.5, 0.5)
-    live2dModel.x = app.screen.width / 2
-    live2dModel.y = app.screen.height / 2
+    resizeModel()
+    resizeObserver = new ResizeObserver(resizeModel)
+    resizeObserver.observe(canvasContainer.value!)
     app.stage.addChild(live2dModel)
 
     // 设置初始表情
     try {
-      if (key === 'sakiko') {
-        live2dModel.expression('serious')
-      } else {
-        live2dModel.expression('idle')
-      }
+      const expression = props.initialExpression || (key === 'sakiko' ? 'serious' : 'idle')
+      await live2dModel.expression(expression)
     } catch (_e) { /* expression not supported */ }
 
     // 行为选择由 Python controller 完成；renderer 只执行指定 group/index。
     sm = new Live2DStateMachine(live2dModel, Ticker.shared, key, (fact) => emit('renderer-fact', {
       ...fact,
       data: { ...fact.data, model_token: props.modelToken || '' },
-    }), props.rendererId || key)
+    }), props.rendererId || key, props.modelToken || '')
     sm.start()
     emit('stateMachineReady', sm)
     console.log('[Live2DStage] Model loaded, state machine started')
   } catch (e) {
     console.error('[Live2DStage] Failed to load model:', e)
+    emit('renderer-fact', {
+      type: 'command_failed',
+      data: {
+        command_type: 'load_model',
+        model_token: props.modelToken || '',
+        renderer_id: props.rendererId || props.modelKey || 'electron-renderer',
+        reason: String(e),
+      },
+    })
   }
 })
 
 onUnmounted(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   sm?.destroy()
   sm = null
   app?.destroy(true)
@@ -97,5 +121,6 @@ onUnmounted(() => {
 .live2d-container canvas {
   width: 100%;
   height: 100%;
+  display: block;
 }
 </style>

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { shallowRef, ref, onUnmounted, computed, onMounted, provide } from 'vue'
-import { refDebounced } from '@vueuse/core'
 import Live2DStage from './components/Live2DStage.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 import ControlsIsland from './components/controls-island/index.vue'
@@ -18,6 +17,7 @@ const currentCharKey = ref('sakiko')
 // 所有模型统一走 Bridge HTTP，初始默认黑祥
 const customModelPath = ref('http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json')
 const pendingModelToken = ref('')
+const initialExpression = ref('serious')
 const rendererId = sessionStorage.getItem('live2d-renderer-id') || (() => {
   const id = crypto.randomUUID(); sessionStorage.setItem('live2d-renderer-id', id); return id
 })()
@@ -38,10 +38,6 @@ const isOverModel = computed(() => {
 })
 const shouldFade = computed(() => fadeOnHoverEnabled.value && isOverModel.value)
 
-// ── 窗口边框高亮（airi border highlight）──
-const _nearBorder = ref(false)
-const nearBorder = refDebounced(_nearBorder, 250)
-
 onMounted(() => {
   // 悬停淡出鼠标追踪
   window.addEventListener('mousemove', (e) => {
@@ -50,19 +46,6 @@ onMounted(() => {
   document.addEventListener('mouseleave', () => { mouseInWindow.value = false })
   document.addEventListener('mouseenter', () => { mouseInWindow.value = true })
 
-  // 边框高亮鼠标追踪
-  setInterval(async () => {
-    try {
-      const pos = await (window as any).electronAPI?.getMousePosition()
-      const bounds = await (window as any).electronAPI?.getWindowBounds()
-      if (!pos || !bounds) return
-      const rx = pos.x - bounds.x
-      const ry = pos.y - bounds.y
-      const t = 10
-      _nearBorder.value = rx >= -t && rx <= bounds.width + t && ry >= -t && ry <= bounds.height + t
-        && (rx <= t || rx >= bounds.width - t || ry <= t || ry >= bounds.height - t)
-    } catch {}
-  }, 200)
 })
 
 function toggleFadeOnHover() {
@@ -72,17 +55,18 @@ function toggleFadeOnHover() {
 provide('fadeOnHoverEnabled', fadeOnHoverEnabled)
 provide('toggleFadeOnHover', toggleFadeOnHover)
 
-function reloadCustomModel(path: string, charKey?: string) {
-  disconnectWebSocket()
+function reloadCustomModel(path: string, charKey?: string, expression?: string) {
   stateMachine.value = null
   customModelPath.value = path
   if (charKey) currentCharKey.value = charKey
+  if (expression) initialExpression.value = expression
   stageKey.value++
 }
 
 function onStateMachineReady(sm: Live2DStateMachine) {
   stateMachine.value = sm
-  connectWebSocket(sm)
+  if (ws?.readyState === WebSocket.OPEN) sm.reportReady()
+  else connectWebSocket()
 }
 
 function createProtocolMessage(type: string, data: Record<string, any>): ProtocolMessage {
@@ -104,18 +88,21 @@ let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
 
-function connectWebSocket(sm: Live2DStateMachine) {
+function connectWebSocket() {
+  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return
   if (ws) { try { ws.onopen=null; ws.onclose=null; ws.onerror=null; ws.onmessage=null; ws.close() } catch(_){}; ws=null }
-  try { ws = new WebSocket('ws://localhost:9876') } catch(e) { scheduleReconnect(sm); return }
+  try { ws = new WebSocket('ws://localhost:9876') } catch(e) { scheduleReconnect(); return }
   ws.onopen = () => {
     wsConnected.value = true
     reconnectDelay = 1000
-    sm.reset()
+    stateMachine.value?.reset()
     ws?.send(JSON.stringify(createProtocolMessage('renderer_hello', {
       capabilities: ['motion', 'audio', 'lipsync', 'snapshot'],
       model_key: currentCharKey.value,
+      model_token: pendingModelToken.value,
       renderer_id: rendererId,
     })))
+    stateMachine.value?.reportReady()
   }
   ws.onmessage = (event) => {
     try {
@@ -132,24 +119,28 @@ function connectWebSocket(sm: Live2DStateMachine) {
           || (target && target !== rendererId)) return
         if (command?.type === 'load_model' && command.data?.model?.model_url) {
           pendingModelToken.value = String(command.data.token || '')
-          reloadCustomModel(command.data.model.model_url, command.data.model.character_folder)
+          reloadCustomModel(
+            command.data.model.model_url,
+            command.data.model.character_folder,
+            command.data.model.initial_expression,
+          )
           return
         }
-        if (command?.type) sm.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
+        if (command?.type) stateMachine.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: command.data || command })
         return
       }
       if (msg.type === 'model_switch' && msg.data?.model_url) {
-        reloadCustomModel(msg.data.model_url, msg.data.character_folder)
+        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.initial_expression)
         return
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
         for (const command of msg.data.commands) {
-          if (command?.type) sm.pushCommand(command)
+          if (command?.type) stateMachine.value?.pushCommand(command)
         }
       }
     } catch(e) { console.warn('[WS] Parse:', e) }
   }
-  ws.onclose = () => { wsConnected.value=false; scheduleReconnect(sm) }
+  ws.onclose = () => { wsConnected.value=false; ws=null; scheduleReconnect() }
   ws.onerror = () => { ws?.close() }
 }
 
@@ -159,9 +150,13 @@ function onRendererFact(fact: { type: string; event_id?: string; data: Record<st
   ws.send(JSON.stringify(message))
 }
 
-function scheduleReconnect(sm: Live2DStateMachine) {
+provide('sendRendererIntent', (intent: string) => {
+  onRendererFact({ type: 'renderer_intent', data: { intent } })
+})
+
+function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer)
-  reconnectTimer = setTimeout(() => { reconnectDelay = Math.min(reconnectDelay*2, 30000); connectWebSocket(sm) }, reconnectDelay)
+  reconnectTimer = setTimeout(() => { reconnectDelay = Math.min(reconnectDelay*2, 30000); connectWebSocket() }, reconnectDelay)
 }
 
 function disconnectWebSocket() {
@@ -175,7 +170,7 @@ onUnmounted(() => disconnectWebSocket())
 <template>
   <div class="app-root">
     <div class="stage-area" :class="{ 'pointer-events-none': fadeOnHoverEnabled }" :style="{ transition: 'opacity 0.25s ease-in-out', opacity: shouldFade ? 0 : 1 }">
-      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :renderer-id="rendererId" @state-machine-ready="onStateMachineReady" @renderer-fact="onRendererFact" />
+      <Live2DStage :key="stageKey" :model-path="customModelPath" :model-key="currentCharKey" :model-token="pendingModelToken" :initial-expression="initialExpression" :renderer-id="rendererId" @state-machine-ready="onStateMachineReady" @renderer-fact="onRendererFact" />
     </div>
     <Transition name="fade"><div v-if="textBubble" class="text-bubble character">{{ textBubble }}</div></Transition>
     <Transition name="fade"><div v-if="userBubble" class="text-bubble user">{{ userBubble }}</div></Transition>
@@ -183,8 +178,6 @@ onUnmounted(() => disconnectWebSocket())
     <ResizeHandler />
     <ControlsIsland />
 
-    <!-- 窗口边框高亮 -->
-    <div v-if="nearBorder" class="border-highlight"></div>
   </div>
 </template>
 
@@ -197,26 +190,4 @@ onUnmounted(() => disconnectWebSocket())
 .thinking-indicator { position:absolute; top:.5rem; left:50%; transform:translateX(-50%); padding:.25rem .75rem; font-size:12px; border-radius:.5rem; background:rgba(38,38,38,.8); color:#f59e0b; pointer-events:none; }
 .fade-enter-active,.fade-leave-active { transition:opacity .3s ease; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
-
-</style>
-
-<style>
-/* unscoped：Vue scoped 会 hash @keyframes 名，导致 inline style / class 引用不到 */
-.border-highlight {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 9999;
-  pointer-events: none;
-  border: 4px solid rgba(59, 130, 246, 0.5);
-  border-radius: 1rem;
-  animation: border-pulse 2s infinite;
-}
-
-@keyframes border-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
 </style>

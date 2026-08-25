@@ -6,6 +6,7 @@ import time
 import json
 import random
 import uuid
+from queue import Empty
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Callable, Optional, Sequence, cast
@@ -2008,7 +2009,8 @@ class ChatGUI(QWidget):
                  dp_chat,
                  audio_gen,live2d_text_queue,is_display_text_value,motion_complete_value,emotion_queue,audio_file_path_queue,
                  change_char_queue=None,
-                 is_motion_complete=None):
+                 is_motion_complete=None,
+                 electron_ui_command_queue=None):
         super().__init__()
         self.is_motion_complete = is_motion_complete
         self.audio_gen = audio_gen  # 为了获得音频文件路径，以及修改语速
@@ -2018,6 +2020,13 @@ class ChatGUI(QWidget):
         }
         self.dp_chat=dp_chat    # dp_local2 模块引用
         self.change_char_queue = change_char_queue
+        self.electron_ui_command_queue = electron_ui_command_queue
+        self._setting_window_open = False
+        self._electron_ui_command_timer = QTimer(self)
+        self._electron_ui_command_timer.setInterval(50)
+        self._electron_ui_command_timer.timeout.connect(self._drain_electron_ui_commands)  # noqa
+        if self.electron_ui_command_queue is not None:
+            self._electron_ui_command_timer.start()
         # 使用 ChatManager 管理所有聊天记录（与 dp_local2 共享同一个实例）
         self.chat_manager: ChatManager = self.dp_chat.chat_manager
         existing_attachment_manager = getattr(
@@ -4405,16 +4414,39 @@ class ChatGUI(QWidget):
         self.saved_talk_speed_and_pause_second[self.current_character.character_name]['pause_second']=self.audio_gen.pause_second  # noqa
 
 
+    @pyqtSlot()
+    def _drain_electron_ui_commands(self) -> None:
+        """Run Electron-originated UI requests on the QApplication thread."""
+        if self.electron_ui_command_queue is None:
+            return
+        for _ in range(16):
+            try:
+                command = self.electron_ui_command_queue.get_nowait()
+            except Empty:
+                return
+            except Exception:
+                logger.exception("读取 Electron UI 命令失败")
+                return
+            if isinstance(command, dict) and command.get("type") == "open_python_settings":
+                self.open_setting_window()
+
     def open_setting_window(self):
-        setting_window=SettingWindow(
-            self,
-            self.screen,
-            self.current_character.theme_seed,
-            self.audio_gen,
-        )
-        setting_window.exec_()
-        self.schedule_context_usage_refresh()
-        self._refresh_send_button_state()
+        """Open the existing modal settings window at most once at a time."""
+        if self._setting_window_open:
+            return
+        self._setting_window_open = True
+        try:
+            setting_window=SettingWindow(
+                self,
+                self.screen,
+                self.current_character.theme_seed,
+                self.audio_gen,
+            )
+            setting_window.exec_()
+            self.schedule_context_usage_refresh()
+            self._refresh_send_button_state()
+        finally:
+            self._setting_window_open = False
 
     def open_more_function_window(self):
         more_function_win=MoreFunctionWindow(

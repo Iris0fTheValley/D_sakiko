@@ -83,6 +83,7 @@ async function toggleAlwaysOnTop() {
 
 const fadeOnHover = inject<ReturnType<typeof ref<boolean>>>('fadeOnHoverEnabled', ref(false))
 const toggleFadeOnHover = inject<() => void>('toggleFadeOnHover', () => {})
+const sendRendererIntent = inject<(intent: string) => void>('sendRendererIntent', () => {})
 
 // ── 鼠标穿透（照搬 airi 逻辑）──
 // fadeOnHover ON + 鼠标在面板外 → 穿透；鼠标在面板内或面板展开 → 不穿透
@@ -119,17 +120,16 @@ watch(fadeOnHover, (on) => {
 
 const adjustStyleClasses = computed(() => {
   const icon = 'size-5'
-  const border = 'border-2'
   const padding = 'p-2'
-  return { icon, border, padding, button: `${border} ${padding}` }
+  return { icon, padding, button: padding }
 })
 
 function refreshWindow() { window.location.reload() }
 async function toggleDevToolsHandler() { try { await electronAPI.toggleDevTools() } catch {} }
 function closeWindow() { window.close() }
-function openSettings() {
-  settingsOpen.value = true
-  setOverlay('settings', true)
+function toggleSettings() {
+  settingsOpen.value = !settingsOpen.value
+  setOverlay('settings', settingsOpen.value)
 }
 function closeSettings() {
   settingsOpen.value = false
@@ -146,14 +146,14 @@ function closeSettings() {
         enter-from-class="opacity-0 translate-y-8 scale-90 blur-sm"
         leave-to-class="opacity-0 translate-y-8 scale-90 blur-sm"
       >
-        <div v-if="expanded" border="1 neutral-200 dark:neutral-800" mb-2 flex flex-col gap-1 rounded-2xl p-2 backdrop-blur-xl class="bg-neutral-100/80 shadow-2xl shadow-black/20 dark:bg-neutral-900/80">
+        <div v-if="expanded" mb-2 flex flex-col gap-1 rounded-2xl p-2 backdrop-blur-xl class="bg-neutral-100/80 shadow-2xl shadow-black/20 dark:bg-neutral-900/80">
           <Transition
             enter-active-class="transition-all duration-200 ease-out"
             leave-active-class="transition-all duration-150 ease-in"
             enter-from-class="opacity-0 -translate-y-1"
             leave-to-class="opacity-0 -translate-y-1"
           >
-            <section v-if="settingsOpen" border="1 neutral-200/80 dark:neutral-700/60" mb-1 rounded-xl p-2 class="bg-neutral-50/70 dark:bg-neutral-950/30">
+            <section v-if="settingsOpen" mb-1 rounded-xl p-2 class="bg-neutral-50/70 dark:bg-neutral-950/30">
               <div mb-2 flex items-center justify-between gap-3>
                 <div>
                   <div text-sm font-medium text="neutral-800 dark:neutral-100">本地设置</div>
@@ -173,78 +173,27 @@ function closeSettings() {
                 <button
                   type="button"
                   flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover="bg-neutral-200/70 dark:bg-neutral-800/70"
-                  @click="toggleDark()"
-                >
-                  <span text-sm text="neutral-800 dark:neutral-200">{{ isDark ? '亮色模式' : '暗色模式' }}</span>
-                  <div v-if="isDark" i-solar:moon-outline size-4 text="neutral-700 dark:neutral-300" />
-                  <div v-else i-solar:sun-2-outline size-4 text="neutral-700 dark:neutral-300" />
-                </button>
-                <button
-                  type="button"
-                  flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover="bg-neutral-200/70 dark:bg-neutral-800/70"
-                  @click="toggleAlwaysOnTop()"
-                >
-                  <span text-sm text="neutral-800 dark:neutral-200">{{ alwaysOnTop ? '窗口置顶已开启' : '窗口置顶已关闭' }}</span>
-                  <div :class="alwaysOnTop ? 'i-solar:pin-bold' : 'i-solar:pin-linear'" size-4 text="neutral-700 dark:neutral-300" />
-                </button>
-                <button
-                  type="button"
-                  flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover="bg-neutral-200/70 dark:bg-neutral-800/70"
-                  @click="toggleFadeOnHover()"
-                >
-                  <span text-sm text="neutral-800 dark:neutral-200">{{ fadeOnHover ? '悬停隐藏已开启' : '悬停隐藏已关闭' }}</span>
-                  <div :class="fadeOnHover ? 'i-ph:eye' : 'i-ph:eye-slash'" size-4 text="neutral-700 dark:neutral-300" />
-                </button>
-                <button
-                  type="button"
-                  flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover="bg-neutral-200/70 dark:bg-neutral-800/70"
                   @click="refreshWindow"
                 >
                   <span text-sm text="neutral-800 dark:neutral-200">刷新窗口</span>
                   <div i-solar:refresh-linear size-4 text="neutral-700 dark:neutral-300" />
                 </button>
-                <button
-                  type="button"
-                  flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover="bg-neutral-200/70 dark:bg-neutral-800/70"
-                  @click="toggleDevToolsHandler"
-                >
-                  <span text-sm text="neutral-800 dark:neutral-200">切换 DevTools</span>
-                  <div i-solar:code-bold-duotone size-4 text="neutral-700 dark:neutral-300" />
-                </button>
-                <div title="当前由 Python/Bridge 控制，尚未提供反向接口">
-                  <button type="button" disabled flex w-full cursor-not-allowed items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left opacity-45>
-                    <span>
-                      <span block text-sm text="neutral-800 dark:neutral-200">切换角色</span>
-                      <span block text-xs text="neutral-600 dark:neutral-400">当前由 Python/Bridge 控制</span>
-                    </span>
-                    <div i-solar:emoji-funny-square-broken size-4 text="neutral-700 dark:neutral-300" />
-                  </button>
-                </div>
-                <div title="当前由 Python/Bridge 控制，尚未提供反向接口">
-                  <button type="button" disabled flex w-full cursor-not-allowed items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left opacity-45>
-                    <span>
-                      <span block text-sm text="neutral-800 dark:neutral-200">语音配置</span>
-                      <span block text-xs text="neutral-600 dark:neutral-400">当前由 Python/Bridge 控制</span>
-                    </span>
-                    <div i-ph:microphone-slash size-4 text="neutral-700 dark:neutral-300" />
-                  </button>
-                </div>
               </div>
             </section>
           </Transition>
 
           <div grid grid-cols-3 gap-2>
             <ControlButtonTooltip disable-hoverable-content>
-              <ControlButton :button-style="adjustStyleClasses.button" @click="openSettings">
-                <div i-solar:settings-minimalistic-outline :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
+              <ControlButton :button-style="adjustStyleClasses.button" @click="toggleSettings">
+                <div i-lucide:package :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
               </ControlButton>
-              <template #tooltip>打开本地设置</template>
+              <template #tooltip>{{ settingsOpen ? '收起窗口菜单' : '窗口菜单' }}</template>
             </ControlButtonTooltip>
             <ControlButtonTooltip disable-hoverable-content>
-              <ControlButton disabled :button-style="adjustStyleClasses.button" cursor-not-allowed opacity-45>
-                <div i-solar:emoji-funny-square-broken :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
+              <ControlButton :button-style="adjustStyleClasses.button" @click="sendRendererIntent('open_python_settings')">
+                <div i-lucide:settings :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
               </ControlButton>
-              <template #tooltip>当前由 Python/Bridge 控制，尚未提供反向接口</template>
+              <template #tooltip>打开 Python 设置</template>
             </ControlButtonTooltip>
             <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" @click="toggleDevToolsHandler">

@@ -53,6 +53,7 @@ class BehaviorConfig:
     long_audio_threshold: float = 6.0
     long_audio_repeat_delay: float = 2.5
     long_audio_max_repeats: int = 2
+    model_switch_timeout: float = 30.0
 
 
 @dataclass
@@ -168,11 +169,16 @@ class Live2DBehaviorController:
         self._segment: Optional[_Segment] = None
 
         self._model: Dict[str, Any] = {}
+        self._confirmed_model: Dict[str, Any] = {}
         self._model_token = ""
         self._model_cause_event_id = ""
         self._model_turn_id = ""
         self._model_expected: Set[str] = set()
         self._model_ready: Set[str] = set()
+        self._model_failed: Set[str] = set()
+        self._model_transition_groups = ("change_character",)
+        self._model_transition_priority = 3
+        self._model_deadline: Optional[float] = None
         self._bye_event_id = ""
 
     # ------------------------------------------------------------------
@@ -184,6 +190,14 @@ class Live2DBehaviorController:
             if self._closed:
                 return
             now = self._clock()
+
+            if (
+                self._state == "switching"
+                and self._model_token
+                and self._model_deadline is not None
+                and now >= self._model_deadline
+            ):
+                self._abort_model_switch_locked("timeout")
 
             segment = self._segment
             if (
@@ -359,11 +373,25 @@ class Live2DBehaviorController:
             self._cancel_motion_locked("model_switch", cause)
             self._state = "switching"
             self._model = dict(model)
+            raw_transition_groups = model.get("transition_groups", ("change_character",))
+            if isinstance(raw_transition_groups, (list, tuple)):
+                transition_groups = tuple(
+                    str(group) for group in raw_transition_groups if str(group)
+                )
+            else:
+                transition_groups = (str(raw_transition_groups),) if raw_transition_groups else ()
+            self._model_transition_groups = transition_groups or ("change_character",)
+            try:
+                self._model_transition_priority = int(model.get("transition_priority", 3))
+            except (TypeError, ValueError):
+                self._model_transition_priority = 3
             self._model_token = self._new_token_locked("model")
             self._model_cause_event_id = cause
             self._model_turn_id = str(turn_id)
             self._model_expected = set(self._renderers)
             self._model_ready.clear()
+            self._model_failed.clear()
+            self._model_deadline = self._clock() + self._config.model_switch_timeout
             self._queue_command_locked(
                 "load_model",
                 {
@@ -431,6 +459,8 @@ class Live2DBehaviorController:
                 handled = self._on_audio_started_locked(renderer_id, data)
             elif msg_type == "audio_ended":
                 handled = self._on_audio_ended_locked(renderer_id, data)
+            elif msg_type == "command_failed" and data.get("command_type") == "load_model":
+                handled = self._on_model_failed_locked(renderer_id, data)
             elif msg_type in {"motion_failed", "audio_failed"}:
                 handled = self._on_renderer_failure_locked(msg_type, renderer_id, data)
             else:
@@ -458,6 +488,7 @@ class Live2DBehaviorController:
                     "thinking": self._thinking_due,
                     "idle_recover": self._idle_recover_due,
                     "timed_idle": self._timed_idle_due,
+                    "model_switch": self._model_deadline,
                     "long_audio_repeat": (
                         self._segment.long_repeat_due if self._segment is not None else None
                     ),
@@ -482,6 +513,8 @@ class Live2DBehaviorController:
             self._model_turn_id = ""
             self._model_expected.clear()
             self._model_ready.clear()
+            self._model_failed.clear()
+            self._model_deadline = None
             now = self._clock()
             self._idle_recover_due = now + self._config.idle_recover_delay
             self._timed_idle_due = now + self._config.timed_idle_interval
@@ -543,8 +576,11 @@ class Live2DBehaviorController:
             return True
         self._model_ready.add(renderer_id)
         expected = self._model_expected or {renderer_id}
-        if expected.issubset(self._model_ready):
-            self._finish_model_switch_locked()
+        if expected.issubset(self._model_ready | self._model_failed):
+            if self._model_failed:
+                self._abort_model_switch_locked("renderer_failed")
+            else:
+                self._finish_model_switch_locked()
         return True
 
     def _on_renderer_disconnected_locked(self, renderer_id: str) -> bool:
@@ -567,6 +603,18 @@ class Live2DBehaviorController:
             and self._model_expected.issubset(self._model_ready)
         ):
             self._finish_model_switch_locked()
+        return True
+
+    def _on_model_failed_locked(self, renderer_id: str, data: Dict[str, Any]) -> bool:
+        token = str(data.get("token") or data.get("model_token") or "")
+        if self._state != "switching" or not self._model_token or token != self._model_token:
+            return False
+        if self._model_expected and renderer_id not in self._model_expected:
+            return False
+        self._model_failed.add(renderer_id)
+        expected = self._model_expected or {renderer_id}
+        if expected.issubset(self._model_ready | self._model_failed):
+            self._abort_model_switch_locked("renderer_failed")
         return True
 
     def _on_motion_started_locked(self, renderer_id: str, data: Dict[str, Any]) -> bool:
@@ -622,15 +670,53 @@ class Live2DBehaviorController:
     def _finish_model_switch_locked(self) -> None:
         cause = self._model_cause_event_id or self._new_event_id()
         turn_id = self._model_turn_id
+        transition_groups = self._model_transition_groups
+        transition_priority = self._model_transition_priority
+        self._confirmed_model = dict(self._model)
         self._model_token = ""
         self._model_cause_event_id = ""
         self._model_turn_id = ""
         self._model_expected.clear()
         self._model_ready.clear()
+        self._model_failed.clear()
+        self._model_deadline = None
         self._state = "thinking" if self._thinking else "idle"
         self._idle_recover_due = self._clock() + self._config.idle_recover_delay
-        self._request_motion_locked(
-            "change_character", 3, "model_switch", cause, turn_id, ""
+        catalog = self._effective_catalog_locked()
+        available_groups = [group for group in transition_groups if catalog.get(group, 0) > 0]
+        if available_groups:
+            group = (
+                available_groups[0]
+                if len(available_groups) == 1
+                else self._rng.choice(available_groups)
+            )
+            self._request_motion_locked(
+                group, transition_priority, "model_switch", cause, turn_id, ""
+            )
+
+    def _abort_model_switch_locked(self, reason: str) -> None:
+        cause = self._model_cause_event_id or self._new_event_id()
+        failed_model = dict(self._model)
+        self._model = dict(self._confirmed_model)
+        self._model_token = ""
+        self._model_cause_event_id = ""
+        self._model_turn_id = ""
+        self._model_expected.clear()
+        self._model_ready.clear()
+        self._model_failed.clear()
+        self._model_deadline = None
+        self._state = "thinking" if self._thinking else "idle"
+        now = self._clock()
+        self._idle_recover_due = now + self._config.idle_recover_delay
+        self._timed_idle_due = now + self._config.timed_idle_interval
+        self._queue_command_locked(
+            "model_switch_failed",
+            {
+                "cause_event_id": cause,
+                "reason": reason,
+                "model": failed_model,
+                "target_renderer_ids": sorted(self._renderers),
+            },
         )
 
     def _request_motion_locked(

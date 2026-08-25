@@ -8,6 +8,7 @@ export default defineConfig({
       collections: {
         'i-solar': () => import('@iconify/json/json/solar.json').then(m => m.default),
         'i-ph': () => import('@iconify/json/json/phosphor.json').then(m => m.default),
+        'i-lucide': () => import('@iconify/json/json/lucide.json').then(m => m.default),
       },
     }),
   ],
