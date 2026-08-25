@@ -59,5 +59,11 @@ class RendererHostTest(unittest.TestCase):
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"sakiko","motion_groups":{"IDLE":2}}})
         self.assertTrue(host.handle_renderer_fact({"type":"renderer_intent","data":{"intent":"click"}}))
         self.assertEqual((self.out[-1]["type"], self.out[-1]["data"]["group"], self.out[-1]["data"]["index"]), ("play_motion", "IDLE", 1))
+    def test_thinking_fact_is_displayed_but_timer_stays_in_shared_scheduler(self):
+        clock = type("Clock", (), {"value": 0.0, "__call__": lambda self: self.value})()
+        host = SharedRendererHost(self.out.append, SharedLive2DBehavior(rng=Random(0)), SharedBehaviorScheduler(clock=clock, rng=Random(0)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_groups":{"text_generating":1}}})
+        self.assertTrue(host.set_thinking(True)); self.assertEqual(self.out[-1], {"type":"thinking_changed","data":{"active":True}})
+        clock.value = 1.0; self.assertTrue(host.tick()); self.assertEqual(self.out[-1]["data"]["group"], "text_generating")
 
 if __name__ == '__main__': unittest.main()

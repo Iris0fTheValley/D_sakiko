@@ -37,6 +37,12 @@ class SharedRendererHost:
         self._emit(motion)
         return True
 
+    def set_thinking(self, active: bool) -> bool:
+        """Accept an upstream fact; only the shared scheduler owns its timer."""
+        self._scheduler.set_thinking(active)
+        self._emit({"type": "thinking_changed", "data": {"active": active}})
+        return True
+
     def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str, audio_path: str, audio_duration_seconds: float = 0.0) -> bool:
         segment = self._behavior.start_emotion_segment(
             turn_id=turn_id, segment_id=segment_id, emotion=emotion, audio_path=audio_path, audio_duration_seconds=audio_duration_seconds,
@@ -168,6 +174,9 @@ class SharedRendererService:
             if not isinstance(intent, Mapping) or intent.get("type") != "emotion_segment":
                 if isinstance(intent, Mapping) and intent.get("type") == "bye":
                     handled += int(self._host.start_bye())
+                elif isinstance(intent, Mapping) and intent.get("type") == "thinking_changed":
+                    data = intent.get("data", {})
+                    handled += int(isinstance(data, Mapping) and self._host.set_thinking(data.get("active") is True))
                 continue
             data = intent.get("data", {})
             if not isinstance(data, Mapping):
