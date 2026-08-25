@@ -14,6 +14,24 @@ from bridge.saki_bridge import Bridge
 
 
 class BridgeRuntimeFactTest(unittest.TestCase):
+    def test_late_renderer_receives_untargeted_exact_command_snapshot(self):
+        bridge = Bridge(Queue())
+        bridge._cache_command({
+            "v": 2,
+            "type": "switch_live2d",
+            "data": {"model_url": "model.json", "target_renderer_ids": ["pygame-renderer"]},
+        })
+        sent = []
+
+        class SnapshotWS:
+            async def send_to(self, writer, message_type, data):
+                sent.append((writer, message_type, data))
+
+        bridge.ws = SnapshotWS()
+        asyncio.run(bridge._on_renderer_connect("electron-ws"))
+        self.assertEqual(sent[0][0:2], ("electron-ws", "renderer_snapshot"))
+        self.assertEqual(sent[0][2]["commands"][0]["data"], {"model_url": "model.json"})
+
     def test_renderer_fact_is_forwarded_without_controller_specific_filter(self):
         facts = Queue()
         bridge = Bridge(Queue(), renderer_fact_queue=facts)

@@ -376,7 +376,6 @@ def main_thread():
                     this_turn_response = "bye"
 
             if this_turn_response=='bye':
-                emotion_queue.put('bye')    #退出live2D进程
                 owner_intent_queue.put({"type": "bye", "data": {}})
                 dp2qt_queue.put("（再见）")
                 audio_gen.shutdown_worker()
@@ -664,7 +663,6 @@ if __name__=='__main__':
     try:
         # live2d 播放进程
         change_char_queue.put('exit')
-        emotion_queue.put('bye')
         owner_intent_queue.put({"type": "bye", "data": {}})
     except Exception:
         pass

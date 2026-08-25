@@ -179,7 +179,17 @@ function connectWebSocket() {
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {
         for (const command of msg.data.commands) {
-          if (command?.type) rendererController.value?.pushCommand(command)
+          if (!command?.type) continue
+          const commandData = { ...(command.data || command) }
+          if (command.type === 'switch_live2d' && commandData.electron_model_url) {
+            commandData.model_url = commandData.electron_model_url
+          }
+          if (command.type === 'switch_live2d' && commandData.model_url) {
+            pendingModelToken.value = String(commandData.model_token || '')
+            reloadCustomModel(String(commandData.model_url), String(commandData.character_folder || currentCharKey.value))
+            continue
+          }
+          rendererController.value?.pushCommand({ ...command, data: commandData })
         }
       }
     } catch(e) { console.warn('[WS] Parse:', e) }

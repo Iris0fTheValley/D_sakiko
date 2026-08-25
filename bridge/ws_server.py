@@ -17,10 +17,11 @@ GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 class WSServer:
-    def __init__(self, host="localhost", port=9876, on_message=None):
+    def __init__(self, host="localhost", port=9876, on_message=None, on_connect=None):
         self.host = host
         self.port = port
         self.on_message = on_message
+        self.on_connect = on_connect
         self._clients = set()
         self._server = None
 
@@ -68,6 +69,13 @@ class WSServer:
 
         self._clients.add(writer)
         print(f"[WS] Client connected ({len(self._clients)} total)")
+        if self.on_connect is not None:
+            try:
+                result = self.on_connect(writer)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                pass
 
         try:
             while True:
@@ -154,6 +162,13 @@ class WSServer:
             except Exception:
                 dead.add(writer)
         self._clients -= dead
+
+    async def send_to(self, writer, msg_type, data):
+        """Send one protocol message to a single connected client."""
+        if writer not in self._clients:
+            return
+        message = create_message(msg_type, data)
+        await self._send_frame(writer, 0x1, message.encode("utf-8"))
 
     async def start(self):
         print(f"[WS] Starting server on ws://{self.host}:{self.port}")

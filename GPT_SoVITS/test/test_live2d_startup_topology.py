@@ -24,6 +24,11 @@ class Live2DStartupTopologyTest(unittest.TestCase):
         self.assertIn("FanoutQueue(pygame_renderer_command_queue, electron_renderer_command_queue)", source)
         self.assertIn("electron_bridge.start()", source)
 
+    def test_pygame_filters_renderer_targeted_commands_before_execution(self):
+        source = (ROOT / "live2d_module.py").read_text(encoding="utf-8")
+        self.assertIn('"pygame-renderer" not in target_ids', source)
+        self.assertIn('str(target_id) != "pygame-renderer"', source)
+
     def test_control_and_thinking_inputs_enter_owner_ingress(self):
         source = (ROOT / "main2.py").read_text(encoding="utf-8")
         self.assertIn("ThinkingStateQueue(multiprocessing.Queue(), owner_intent_queue, thinking_item_count)", source)

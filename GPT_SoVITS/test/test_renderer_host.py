@@ -20,6 +20,18 @@ class RendererHostTest(unittest.TestCase):
         self.assertEqual(self.out[0]["type"], "play_motion"); token = self.out[0]["data"]["token"]
         self.assertTrue(self.host.handle_renderer_fact({"type":"motion_started","data":{"token":token}}))
         self.assertEqual(self.out[1]["type"], "play_audio"); self.assertEqual(self.out[1]["data"]["path"], "a.wav")
+
+    def test_audio_fanout_selects_one_runtime_owner(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","motion_groups":{"happiness":1}}})
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"random-electron-id","renderer_role":"electron","motion_groups":{"happiness":1}}})
+        self.assertTrue(host.start_emotion_segment(turn_id="t",segment_id="s",emotion="LABEL_0",audio_path="a.wav"))
+        token = self.out[-1]["data"]["token"]
+        host.handle_renderer_fact({"type":"motion_started","data":{"token":token}})
+        audio = self.out[-1]
+        self.assertEqual(audio["type"], "play_audio")
+        self.assertEqual(audio["data"]["target_renderer_id"], "pygame")
+        self.assertEqual(audio["data"]["target_renderer_ids"], ["pygame", "random-electron-id"])
     def test_ready_catalog_resolves_expression_outside_renderer(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_files_by_group":{"happiness":["happiness_smile.mtn"]},"expression_ids":["exp_smile01"]}})
         self.host.start_emotion_segment(turn_id="t",segment_id="s",emotion="LABEL_0",audio_path="a.wav")
@@ -61,6 +73,17 @@ class RendererHostTest(unittest.TestCase):
         worker = Thread(target=service.run, args=(stop,), daemon=True); worker.start()
         time.sleep(0.03); stop.set(); worker.join(0.5)
         self.assertFalse(worker.is_alive())
+
+    def test_service_drains_shutdown_bye_before_stopping(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner())
+        facts.put({"type":"renderer_ready","data":{"motion_groups":{"bye":1}}})
+        intents.put({"type":"bye","data":{}})
+        stop = Event()
+        worker = Thread(target=service.run, args=(stop,), daemon=True)
+        worker.start(); time.sleep(0.03); stop.set(); worker.join(0.5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
     def test_bye_closes_only_after_matching_motion_finished(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_groups":{"bye":1}}})
         self.assertTrue(self.host.start_bye()); token=self.out[-1]["data"]["token"]
@@ -71,6 +94,12 @@ class RendererHostTest(unittest.TestCase):
         host.handle_renderer_fact({"type":"renderer_ready","data":{"model_key":"sakiko","motion_groups":{"IDLE":2}}})
         self.assertTrue(host.handle_renderer_fact({"type":"renderer_intent","data":{"intent":"click"}}))
         self.assertEqual((self.out[-1]["type"], self.out[-1]["data"]["group"], self.out[-1]["data"]["index"]), ("play_motion", "IDLE", 1))
+
+    def test_click_uses_canonical_pygame_model_when_renderer_facts_disagree(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_key":"normal","motion_groups":{"IDLE":2}}})
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"electron","renderer_role":"electron","model_key":"sakiko","motion_groups":{"IDLE":2}}})
+        self.assertFalse(host.handle_renderer_fact({"type":"renderer_intent","data":{"intent":"click"}}))
     def test_thinking_fact_is_displayed_but_timer_stays_in_shared_scheduler(self):
         clock = type("Clock", (), {"value": 0.0, "__call__": lambda self: self.value})()
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(clock=clock, rng=Random(0)))
@@ -80,6 +109,7 @@ class RendererHostTest(unittest.TestCase):
     def test_conversion_waits_for_reloaded_renderer_catalog_before_exact_motion(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(clock=lambda: 0.0, rng=Random(1)))
         self.assertTrue(host.start_sakiko_conversion(False, {"white":"white.model.json"})); self.assertEqual(self.out[-1]["type"], "switch_live2d")
+        self.assertEqual(self.out[-1]["data"]["character_folder_name"], "sakiko")
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"sakiko","motion_groups":{"change_character":1}}})
         self.assertEqual((self.out[-1]["type"],self.out[-1]["data"]["group"],self.out[-1]["data"]["priority"]), ("play_motion","change_character",2))
 
@@ -98,6 +128,23 @@ class RendererHostTest(unittest.TestCase):
         self.assertEqual(self.out[-1]["type"], "switch_live2d")
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"late-electron","renderer_role":"electron","model_token":token,"motion_groups":{"change_character":1}}})
         self.assertEqual(self.out[-1]["type"], "play_motion")
+
+    def test_renderer_joining_after_conversion_completion_replays_exact_commands(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(1)))
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":"old","model_urls":{"white":"white.model.json"},"motion_groups":{"change_character":1}}})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white":"white.model.json"}))
+        token = self.out[-1]["data"]["model_token"]
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":token,"motion_groups":{"change_character":1}}})
+        first_motion = self.out[-1]
+        self.assertEqual(first_motion["type"], "play_motion")
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"late-electron","renderer_role":"electron","model_token":"old","motion_groups":{"change_character":1}}})
+        self.assertEqual(self.out[-1]["type"], "switch_live2d")
+        self.assertEqual(self.out[-1]["data"]["target_renderer_ids"], ["late-electron"])
+        host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"late-electron","renderer_role":"electron","model_token":token,"motion_groups":{"change_character":1}}})
+        replay_motion = self.out[-1]
+        self.assertEqual(replay_motion["type"], "play_motion")
+        self.assertEqual(replay_motion["data"]["target_renderer_ids"], ["late-electron"])
+        self.assertEqual(replay_motion["data"]["token"], first_motion["data"]["token"])
 
     def test_reconnect_ready_does_not_reset_an_active_segment(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","motion_groups":{"happiness":1}}})

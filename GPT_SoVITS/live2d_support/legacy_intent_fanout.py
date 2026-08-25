@@ -44,7 +44,7 @@ class LegacyEmotionAudioFanout:
         self._owner_intents.put({
             "type": "emotion_segment",
             "data": {
-                "turn_id": "legacy-shadow",
+                "turn_id": "legacy-ingress",
                 "segment_id": str(self._sequence),
                 "emotion": str(emotion),
                 "audio_path": str(audio_path),

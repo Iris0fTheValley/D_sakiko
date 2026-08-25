@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from collections import deque
+from copy import deepcopy
 from queue import Empty
 import time
 from uuid import uuid4
@@ -36,9 +37,16 @@ class SharedRendererHost:
         self._pending_conversion_model_token = ""
         self._pending_conversion_renderers: set[str] = set()
         self._pending_conversion_switch: dict[str, Any] | None = None
+        # The owner may finish a conversion before a renderer connects. Keep
+        # the already-resolved commands so that a late renderer executes the
+        # same result without causing another business decision.
+        self._conversion_replay_switch: dict[str, Any] | None = None
+        self._conversion_replay_motion: dict[str, Any] | None = None
+        self._conversion_replay_renderers: set[str] = set()
         self._model_urls: dict[str, str] = {}
         self._model_urls_by_renderer: dict[str, dict[str, str]] = {}
         self._renderer_roles: dict[str, str] = {}
+        self._renderer_model_keys: dict[str, str] = {}
 
     def start_bye(self) -> bool:
         if self._bye_requested:
@@ -133,7 +141,10 @@ class SharedRendererHost:
             else:
                 self._behavior.set_capabilities(data.get("motion_groups", {}))
                 self._scheduler.set_catalog(data.get("motion_groups", {}))
-            self._renderer_is_sakiko = str(data.get("model_key", "")).lower() == "sakiko"
+            model_key = str(data.get("model_key", ""))
+            self._renderer_is_sakiko = model_key.lower() == "sakiko"
+            if renderer_id:
+                self._renderer_model_keys[renderer_id] = model_key
             urls = data.get("model_urls")
             if isinstance(urls, Mapping):
                 normalized_urls = {str(key): str(value) for key, value in urls.items() if value}
@@ -152,14 +163,32 @@ class SharedRendererHost:
                 if not self._pending_conversion_renderers:
                     pending, self._pending_conversion = self._pending_conversion, None
                     self._pending_conversion_model_token = ""
+                    switch = dict(self._pending_conversion_switch or {})
                     self._pending_conversion_switch = None
+                    self._conversion_replay_switch = switch or None
+                    self._conversion_replay_renderers = set(self._renderer_ids)
                     self._emit_conversion_motion(pending)
+            elif renderer_id and self._conversion_replay_switch is not None:
+                # A renderer that joins after the conversion barrier must be
+                # brought to the owner's current model and receive the exact
+                # motion command already sent to the other renderers.
+                expected_token = str(self._conversion_replay_switch.get("model_token") or "")
+                actual_token = str(data.get("model_token") or "")
+                if actual_token != expected_token:
+                    switch = deepcopy(self._conversion_replay_switch)
+                    switch["target_renderer_ids"] = [renderer_id]
+                    self._emit({"type": "switch_live2d", "data": switch})
+                elif renderer_id not in self._conversion_replay_renderers and self._conversion_replay_motion is not None:
+                    motion = deepcopy(self._conversion_replay_motion)
+                    motion.setdefault("data", {})["target_renderer_ids"] = [renderer_id]
+                    self._conversion_replay_renderers.add(renderer_id)
+                    self._emit(motion)
             return True
         fact_renderer_id = str(data.get("renderer_id") or "")
         if self._renderer_ids and fact_renderer_id and fact_renderer_id not in self._renderer_ids:
             return False
         if message.get("type") == "renderer_intent" and data.get("intent") == "click":
-            command = self._scheduler.click(is_sakiko=self._renderer_is_sakiko)
+            command = self._scheduler.click(is_sakiko=self._canonical_renderer_is_sakiko())
             return self._emit_scheduled(command)
         normalized = normalize_renderer_fact(message)
         if normalized is None:
@@ -225,6 +254,9 @@ class SharedRendererHost:
         model_url = str(candidates.get(decision.model_target, ""))
         if not model_url:
             return False
+        self._conversion_replay_switch = None
+        self._conversion_replay_motion = None
+        self._conversion_replay_renderers.clear()
         self._pending_conversion = decision
         self._pending_conversion_model_token = uuid4().hex
         self._pending_conversion_renderers = set(self._renderer_ids)
@@ -237,6 +269,7 @@ class SharedRendererHost:
             "model_url": model_url,
             "electron_model_url": electron_urls.get(decision.model_target, model_url),
             "character_folder": "sakiko",
+            "character_folder_name": "sakiko",
             "model_token": self._pending_conversion_model_token,
         }
         self._emit({"type": "switch_live2d", "data": dict(self._pending_conversion_switch)})
@@ -250,12 +283,12 @@ class SharedRendererHost:
             command = self._scheduler.request_fixed_motion(decision.motion_group, decision.fixed_index, decision.priority, decision.purpose)
         if command is not None and expression is not None:
             command = ScheduledMotion(command.group, command.index, command.priority, command.purpose, expression)
-        return self._emit_scheduled(command)
+        return self._emit_scheduled(command, replay_for_late_renderers=True)
 
     def tick(self) -> bool:
         return self._emit_scheduled(self._scheduler.tick())
 
-    def _emit_scheduled(self, scheduled: ScheduledMotion | None) -> bool:
+    def _emit_scheduled(self, scheduled: ScheduledMotion | None, *, replay_for_late_renderers: bool = False) -> bool:
         if scheduled is None:
             return False
         self._scheduler.motion_requested(scheduled.purpose)
@@ -268,6 +301,8 @@ class SharedRendererHost:
         assert motion is not None
         if self._renderer_ids:
             motion.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
+        if replay_for_late_renderers:
+            self._conversion_replay_motion = deepcopy(motion)
         self._emit(motion)
         return True
 
@@ -276,7 +311,32 @@ class SharedRendererHost:
             payload = audio_command(command, segment)
             if self._renderer_ids:
                 payload.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
+                audio_owner = self._audio_owner_renderer_id()
+                if audio_owner:
+                    payload.setdefault("data", {})["target_renderer_id"] = audio_owner
             self._emit(payload)
+
+    def _audio_owner_renderer_id(self) -> str | None:
+        """Select one runtime for audible playback while motions fan out."""
+        for role in ("pygame", "electron"):
+            candidates = sorted(
+                renderer_id for renderer_id in self._renderer_ids
+                if self._renderer_roles.get(renderer_id) == role
+            )
+            if candidates:
+                return candidates[0]
+        return None
+
+    def _canonical_renderer_is_sakiko(self) -> bool:
+        """Use one stable runtime role when multiple renderer facts disagree."""
+        for role in ("pygame", "electron"):
+            candidates = sorted(
+                renderer_id for renderer_id in self._renderer_ids
+                if self._renderer_roles.get(renderer_id) == role
+            )
+            if candidates:
+                return self._renderer_model_keys.get(candidates[0], "").lower() == "sakiko"
+        return self._renderer_is_sakiko
 
 
 class SharedRendererService:
@@ -330,6 +390,18 @@ class SharedRendererService:
 
     def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
         """Run until the caller's lifecycle owner requests a clean stop."""
-        while not stop_event.is_set():
-            if self.run_once() == 0:
+        drain_deadline = None
+        while True:
+            handled = self.run_once()
+            if stop_event.is_set():
+                if drain_deadline is None:
+                    drain_deadline = time.monotonic() + 2.0
+                # A shutdown intent may have been queued immediately before
+                # the stop event. Give the owner a bounded opportunity to
+                # turn it into an exact close/bye command.
+                if not self._pending_intents and (self._intents.empty() or not self._host.ready):
+                    break
+                if time.monotonic() >= drain_deadline:
+                    break
+            if handled == 0:
                 time.sleep(poll_interval_seconds)

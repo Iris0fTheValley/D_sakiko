@@ -367,7 +367,7 @@ class Live2DModule:
                     "motion_files_by_group": model.motion_files_by_group,
                     "expression_ids": list(model.expression_ids),
                     "model_urls": {
-                        "white": self.PATH_JSON or "",
+                        "white": "../live2d_related/sakiko/live2D_model/3.model.json",
                         "black": "../live2d_related/sakiko/live2D_model_costume/3.model.json",
                     },
                     "capabilities": {"motion": True, "audio": True, "lipsync": True},
@@ -389,9 +389,10 @@ class Live2DModule:
         renderer_audio_token = ""
         renderer_audio_was_busy = False
         renderer_local_controls = queue.Queue()
+        renderer_thinking_active = False
 
         def execute_renderer_commands() -> None:
-            nonlocal renderer_audio_token
+            nonlocal renderer_audio_token, renderer_thinking_active
             if renderer_command_queue is None:
                 return
             adapter = (
@@ -404,6 +405,14 @@ class Live2DModule:
                 except queue.Empty:
                     break
                 if isinstance(command, dict):
+                    data = command.get("data", {})
+                    if isinstance(data, dict):
+                        target_ids = data.get("target_renderer_ids")
+                        if isinstance(target_ids, (list, tuple, set)) and target_ids and "pygame-renderer" not in target_ids:
+                            continue
+                        target_id = data.get("target_renderer_id")
+                        if target_id and str(target_id) != "pygame-renderer":
+                            continue
                     if command.get("type") == "close_renderer":
                         self.run = False
                         continue
@@ -424,7 +433,10 @@ class Live2DModule:
                         except Exception:
                             pass
                     if command.get("type") in {"stop_audio", "stop_motion", "reset", "thinking_changed", "change_l2d_background", "switch_l2d_fps", "toggle_l2d_layout_edit"}:
-                        if command.get("type") == "change_l2d_background":
+                        if command.get("type") == "thinking_changed":
+                            data = command.get("data", {})
+                            renderer_thinking_active = isinstance(data, dict) and data.get("active") is True
+                        elif command.get("type") == "change_l2d_background":
                             change_char_queue.put(command.get("data", {}))
                         elif command.get("type") == "switch_l2d_fps":
                             change_char_queue.put(command.get("data", {}))
@@ -711,6 +723,8 @@ class Live2DModule:
 
             if layout_editing:
                 pygame.display.set_caption(f"{self.current_character.character_name}布局编辑中")
+            elif renderer_thinking_active:
+                pygame.display.set_caption(f"{self.current_character.character_name}思考中")
             else:
                 pygame.display.set_caption(f"{self.current_character.character_name}")
 

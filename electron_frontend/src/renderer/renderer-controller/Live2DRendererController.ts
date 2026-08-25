@@ -192,8 +192,14 @@ export class Live2DRendererController {
       return
     }
     this.stopAudio()
-    this.audioOwner = data.target_renderer_id === undefined
-      || String(data.target_renderer_id || '') === this.rendererId
+    const audioTarget = String(data.target_renderer_id || '')
+    if (audioTarget && audioTarget !== this.rendererId) {
+      // Motion still fans out to every renderer, but only one runtime owns
+      // audible playback and its lifecycle facts.
+      this.audioOwner = false
+      return
+    }
+    this.audioOwner = true
     this.audioToken = String(data.token || data.audio_token || '')
     this.audioTurnId = String(data.turn_id || '')
     this.audioSegmentId = segmentId
