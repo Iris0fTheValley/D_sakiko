@@ -50,7 +50,12 @@ class SharedRendererHost:
         if not isinstance(data, Mapping):
             return False
         if message.get("type") == "renderer_ready":
-            self._behavior.set_capabilities(data.get("motion_groups", {}))
+            motion_files = data.get("motion_files_by_group")
+            expression_ids = data.get("expression_ids", ())
+            if isinstance(motion_files, Mapping):
+                self._behavior.set_model_catalog(motion_files, expression_ids if isinstance(expression_ids, (list, tuple)) else ())
+            else:
+                self._behavior.set_capabilities(data.get("motion_groups", {}))
             return True
         normalized = normalize_renderer_fact(message)
         if normalized is None:

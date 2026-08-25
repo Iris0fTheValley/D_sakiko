@@ -48,31 +48,28 @@ onMounted(async () => {
     live2dModel.y = app.screen.height / 2
     app.stage.addChild(live2dModel)
 
-    // 设置初始表情
-    try {
-      if (key === 'sakiko') {
-        live2dModel.expression('serious')
-      } else {
-        live2dModel.expression('idle')
-      }
-    } catch (_e) { /* expression not supported */ }
-
-    // 动态读取 model.json 获取 motion 组大小（新角色自动适配）
-    let dynamicSizes: Record<string, number> | undefined
+    // 读取 renderer capability facts；共享行为层据此完成所有选择。
+    let motionFilesByGroup: Record<string, string[]> | undefined
+    let expressionIds: string[] | undefined
     try {
       const modelDef = await fetch(modelSrc).then(r => r.json())
       const motions = modelDef.motions || {}
-      dynamicSizes = {}
+      motionFilesByGroup = {}
       for (const [group, entries] of Object.entries(motions)) {
-        if (Array.isArray(entries)) dynamicSizes[group] = entries.length
+        if (Array.isArray(entries)) {
+          motionFilesByGroup[group] = entries.map((entry: any) => String(entry?.file || ''))
+        }
       }
-      console.log('[Live2DStage] Dynamic motion sizes:', dynamicSizes)
+      expressionIds = Array.isArray(modelDef.expressions)
+        ? modelDef.expressions.map((entry: any) => String(entry?.name || entry?.file || '').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '')).filter(Boolean)
+        : []
+      console.log('[Live2DStage] Renderer capability catalog loaded')
     } catch (e) {
-      console.warn('[Live2DStage] Could not read motion sizes, using defaults:', e)
+      console.warn('[Live2DStage] Could not read renderer capability catalog:', e)
     }
 
     // 创建状态机并启动
-    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key, dynamicSizes)
+    sm = new Live2DStateMachine(live2dModel, Ticker.shared, key, motionFilesByGroup, expressionIds)
     sm.start()
     emit('stateMachineReady', sm)
     console.log('[Live2DStage] Model loaded, state machine started')

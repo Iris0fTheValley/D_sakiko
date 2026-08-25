@@ -18,6 +18,10 @@ class RendererHostTest(unittest.TestCase):
         self.assertEqual(self.out[0]["type"], "play_motion"); token = self.out[0]["data"]["token"]
         self.assertTrue(self.host.handle_renderer_fact({"type":"motion_started","data":{"token":token}}))
         self.assertEqual(self.out[1]["type"], "play_audio"); self.assertEqual(self.out[1]["data"]["path"], "a.wav")
+    def test_ready_catalog_resolves_expression_outside_renderer(self):
+        self.host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_files_by_group":{"happiness":["happiness_smile.mtn"]},"expression_ids":["exp_smile01"]}})
+        self.host.start_emotion_segment(turn_id="t",segment_id="s",emotion="LABEL_0",audio_path="a.wav")
+        self.assertEqual(self.out[-1]["data"]["expression_id"], "exp_smile01")
     def test_command_failure_is_consumed(self):
         self.host.start_emotion_segment(turn_id="t",segment_id="s",emotion="LABEL_0",audio_path="a.wav")
         token = self.out[0]["data"]["token"]

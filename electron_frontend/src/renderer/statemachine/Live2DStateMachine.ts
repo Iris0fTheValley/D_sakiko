@@ -15,10 +15,17 @@ export class Live2DStateMachine {
   private activeMotionToken = ''
   private currentAudio: HTMLAudioElement | null = null
 
-  constructor(private readonly model: Live2DModel, private readonly ticker: Ticker, private readonly modelKey: string, reporter: Reporter = () => {}) {
+  constructor(
+    private readonly model: Live2DModel,
+    private readonly ticker: Ticker,
+    private readonly modelKey: string,
+    private readonly motionFilesByGroup: Record<string, string[]> = {},
+    private readonly expressionIds: string[] = [],
+    reporter: Reporter = () => {},
+  ) {
     this.reporter = reporter
   }
-  start(): void { this.report({ type: 'renderer_ready', data: { renderer_id: this.modelKey, motion_groups: this.motionGroups(), capabilities: { motion: true, audio: true, lipsync: true } } }) }
+  start(): void { this.report({ type: 'renderer_ready', data: { renderer_id: this.modelKey, motion_groups: this.motionGroups(), motion_files_by_group: this.motionFilesByGroup, expression_ids: this.expressionIds, capabilities: { motion: true, audio: true, lipsync: true } } }) }
   destroy(): void { this.stopAudio(); this.stopMotion() }
   reset(): void { this.stopAudio(); this.stopMotion(); this.textBubble.value = null; this.userBubble.value = null; this.isThinking.value = false }
   setReporter(reporter: Reporter): void { this.reporter = reporter; this.start() }
