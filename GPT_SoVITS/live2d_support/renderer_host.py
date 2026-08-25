@@ -19,6 +19,18 @@ class SharedRendererHost:
     def __init__(self, emit: CommandEmitter, behavior: SharedLive2DBehavior | None = None) -> None:
         self._emit = emit
         self._behavior = behavior or SharedLive2DBehavior()
+        self._bye_token = ""
+
+    def start_bye(self) -> bool:
+        command = self._behavior.start_named_motion(turn_id="", segment_id="", group="bye", priority=3)
+        if command is None:
+            self._emit({"type": "close_renderer", "data": {"reason": "bye_motion_unavailable"}})
+            return False
+        self._bye_token = command.command_id
+        motion = motion_command(command)
+        assert motion is not None
+        self._emit(motion)
+        return True
 
     def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str, audio_path: str) -> bool:
         segment = self._behavior.start_emotion_segment(
@@ -52,7 +64,11 @@ class SharedRendererHost:
             self._emit_audio(self._behavior.motion_rejected(token), active)
             return True
         if fact == "motion_finished":
-            return self._behavior.motion_finished(token)
+            handled = self._behavior.motion_finished(token)
+            if handled and token == self._bye_token:
+                self._bye_token = ""
+                self._emit({"type": "close_renderer", "data": {"reason": "bye_motion_finished"}})
+            return handled
         if fact == "audio_started":
             return self._behavior.audio_started(token)
         if fact == "audio_ended":
@@ -89,6 +105,8 @@ class SharedRendererService:
             except Empty:
                 break
             if not isinstance(intent, Mapping) or intent.get("type") != "emotion_segment":
+                if isinstance(intent, Mapping) and intent.get("type") == "bye":
+                    handled += int(self._host.start_bye())
                 continue
             data = intent.get("data", {})
             if not isinstance(data, Mapping):

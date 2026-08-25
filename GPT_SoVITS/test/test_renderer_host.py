@@ -37,5 +37,10 @@ class RendererHostTest(unittest.TestCase):
         worker = Thread(target=service.run, args=(stop,), daemon=True); worker.start()
         time.sleep(0.03); stop.set(); worker.join(0.5)
         self.assertFalse(worker.is_alive())
+    def test_bye_closes_only_after_matching_motion_finished(self):
+        self.host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_groups":{"bye":1}}})
+        self.assertTrue(self.host.start_bye()); token=self.out[-1]["data"]["token"]
+        self.host.handle_renderer_fact({"type":"motion_finished","data":{"token":"stale"}}); self.assertEqual(self.out[-1]["type"],"play_motion")
+        self.host.handle_renderer_fact({"type":"motion_finished","data":{"token":token}}); self.assertEqual(self.out[-1]["type"],"close_renderer")
 
 if __name__ == '__main__': unittest.main()

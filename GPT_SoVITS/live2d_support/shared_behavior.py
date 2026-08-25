@@ -137,6 +137,14 @@ class SharedLive2DBehavior:
         self._audio_start_dispatched = False
         return command
 
+    def start_named_motion(self, *, turn_id: str, segment_id: str, group: str, priority: int) -> PlaySegment | None:
+        capability = self._capabilities.get(group)
+        if capability is None:
+            return None
+        command = PlaySegment(uuid4().hex, turn_id, segment_id, ExactMotion(group, self._rng.randrange(capability.count), priority), "", 0.0)
+        self._active_command, self._motion_active, self._audio_active, self._audio_start_dispatched = command, False, False, False
+        return command
+
     def motion_started(self, command_id: str) -> StartAudio | None:
         if not self._matches(command_id):
             return None
