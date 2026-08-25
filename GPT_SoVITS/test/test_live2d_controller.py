@@ -1,5 +1,8 @@
+import json
 import random
+import tempfile
 import unittest
+from pathlib import Path
 
 try:
     from live2d_controller import BehaviorConfig, Live2DBehaviorController
@@ -25,7 +28,7 @@ class Live2DControllerTest(unittest.TestCase):
         for renderer_id in ("window-a", "window-b"):
             self._ready_renderer(renderer_id, "ready-" + renderer_id)
 
-    def _ready_renderer(self, renderer_id, event_id, model_token=""):
+    def _ready_renderer(self, renderer_id, event_id, model_token="", expression_ids=None):
         self.assertTrue(self.controller.handle_renderer_event({
                 "type": "renderer_ready",
                 "event_id": event_id,
@@ -35,7 +38,7 @@ class Live2DControllerTest(unittest.TestCase):
                     "renderer_id": renderer_id,
                     "model_token": model_token,
                     "motion_groups": self.catalog,
-                    "expression_ids": ["idle", "serious"],
+                    "expression_ids": expression_ids or ["idle", "serious"],
                     "capabilities": {"audio": True},
                 },
             }))
@@ -224,20 +227,39 @@ class Live2DControllerTest(unittest.TestCase):
         self.assertIsNone(second)
 
     def test_emotion_expression_is_selected_once_and_restored_to_idle(self):
-        self.controller.start_emotion_segment(
-            turn_id="turn-expression",
-            segment_id="segment-expression",
-            emotion="anger",
-            motion_group="happiness",
-        )
-        expression_commands = [item for item in self.commands if item["type"] == "set_expression"]
-        self.assertEqual(expression_commands[0]["data"]["expression"], "serious")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "3.model.json"
+            model_path.write_text(json.dumps({
+                "motions": {"happiness": [{"file": "angry01.mtn"}]},
+            }), encoding="utf-8")
+            model_token = self.controller.switch_model({
+                "model_json_path": str(model_path),
+                "transition_groups": [],
+            })
+            self._ready_renderer(
+                "window-a", "expression-model-a", model_token,
+                ["idle", "serious", "exp_angry01"],
+            )
+            self._ready_renderer(
+                "window-b", "expression-model-b", model_token,
+                ["idle", "serious", "exp_angry01"],
+            )
+            command_start = len(self.commands)
+            self.controller.start_emotion_segment(
+                turn_id="turn-expression",
+                segment_id="segment-expression",
+                emotion="anger",
+                motion_group="happiness",
+            )
+
+        commands = self.commands[command_start:]
+        expression_commands = [item for item in commands if item["type"] == "set_expression"]
+        self.assertEqual(expression_commands[0]["data"]["expression"], "exp_angry01")
         self.assertEqual(
             expression_commands[0]["data"]["target_renderer_ids"],
             ["window-a", "window-b"],
         )
-
-        motion = next(item for item in self.commands if item["type"] == "play_motion")
+        motion = next(item for item in commands if item["type"] == "play_motion")
         for renderer_id in ("window-a", "window-b"):
             self.assertTrue(self.controller.handle_renderer_event({
                 "type": "motion_finished",

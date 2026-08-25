@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from live2d_support.motion_semantics import MotionPosition, POSITION_MOTION_SUFFIXES, standard_motion_group_ids
+try:
+    from live2d_support.motion_semantics import MotionPosition, POSITION_MOTION_SUFFIXES, standard_motion_group_ids
+except ModuleNotFoundError:  # Support importing through GPT_SoVITS in tests.
+    from GPT_SoVITS.live2d_support.motion_semantics import MotionPosition, POSITION_MOTION_SUFFIXES, standard_motion_group_ids
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,13 @@ def get_live2d_motion_capabilities(model_json_path: str) -> Live2DMotionCapabili
     model_data = _read_model_json_object(model_json_path)
     motion_files_by_group = _collect_motion_files_by_group(model_data, Path(model_json_path))
     return motion_capabilities_from_motion_files_by_group(motion_files_by_group)
+
+
+def motion_files_by_group_from_model_json(model_json_path: str) -> dict[str, tuple[str, ...]]:
+    """Read the model's authoritative group/index-to-motion-file mapping."""
+    model_path = Path(model_json_path)
+    model_data = _read_model_json_object(model_json_path)
+    return _collect_motion_files_by_group(model_data, model_path)
 
 
 def _read_model_json_object(model_json_path: str) -> dict[str, object]:

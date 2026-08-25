@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
@@ -11,13 +14,15 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from live2d_support.expression_policy import (
-    expression_candidates_for_emotion,
     normalized_name_tokens,
     select_expression_for_motion,
     select_supported_expression,
     semantic_expression_candidates,
 )
-from live2d_support.motion_capabilities import motion_capabilities_from_motion_files_by_group
+from live2d_support.motion_capabilities import (
+    motion_capabilities_from_motion_files_by_group,
+    motion_files_by_group_from_model_json,
+)
 from live2d_support.motion_selection import resolve_positioned_motion_group, select_random_motion
 from live2d_support.runtime_adapter import Live2DModelAdapter
 
@@ -91,11 +96,6 @@ class Live2DExpressionPolicyTestCase(unittest.TestCase):
         self.assertIsNotNone(candidates)
         self.assertEqual(candidates[0], "exp_smile02")
 
-    def test_emotion_expression_candidates_include_bundled_model_ids(self) -> None:
-        """Emotion selection can use the bundled model's serious/idle IDs."""
-        self.assertIn("idle", expression_candidates_for_emotion("LABEL_0"))
-        self.assertIn("serious", expression_candidates_for_emotion("anger"))
-
     def test_select_expression_for_motion_prefers_motion_file_token(self) -> None:
         """验证动作文件名 token 优先于动作组语义。"""
         expression_id = select_expression_for_motion(
@@ -115,6 +115,29 @@ class Live2DExpressionPolicyTestCase(unittest.TestCase):
         )
 
         self.assertEqual(expression_id, "exp_idle01")
+
+    def test_motion_metadata_parser_reads_v2_and_v3_group_files(self) -> None:
+        """group/index metadata is read once in Python for the shared policy."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            v2_path = Path(temp_dir) / "3.model.json"
+            v2_path.write_text(json.dumps({
+                "motions": {"happiness": [{"file": "smile01.mtn"}]},
+            }), encoding="utf-8")
+            v3_path = Path(temp_dir) / "sample.model3.json"
+            v3_path.write_text(json.dumps({
+                "FileReferences": {
+                    "Motions": {"happiness": [{"File": "motions/smile01.motion3.json"}]},
+                },
+            }), encoding="utf-8")
+
+            self.assertEqual(
+                motion_files_by_group_from_model_json(str(v2_path)),
+                {"happiness": ("smile01.mtn",)},
+            )
+            self.assertEqual(
+                motion_files_by_group_from_model_json(str(v3_path)),
+                {"happiness": ("motions/smile01.motion3.json",)},
+            )
 
 
 class Live2DMotionSelectionTestCase(unittest.TestCase):

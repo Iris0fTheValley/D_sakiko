@@ -24,15 +24,15 @@ from typing import Any, Callable, Deque, Dict, Mapping, Optional, Set
 
 try:
     from live2d_support.expression_policy import (
-        expression_candidates_for_emotion,
-        select_supported_expression,
+        select_expression_for_motion,
     )
+    from live2d_support.motion_capabilities import motion_files_by_group_from_model_json
     from live2d_support.motion_semantics import motion_group_for_emotion
 except ModuleNotFoundError:  # Support importing as GPT_SoVITS.live2d_controller in tests.
     from GPT_SoVITS.live2d_support.expression_policy import (
-        expression_candidates_for_emotion,
-        select_supported_expression,
+        select_expression_for_motion,
     )
+    from GPT_SoVITS.live2d_support.motion_capabilities import motion_files_by_group_from_model_json
     from GPT_SoVITS.live2d_support.motion_semantics import motion_group_for_emotion
 
 
@@ -174,6 +174,8 @@ class Live2DBehaviorController:
         self._model_transition_groups = ("change_character",)
         self._model_transition_priority = 3
         self._model_deadline: Optional[float] = None
+        self._motion_files_by_group: Dict[str, tuple[str, ...]] = {}
+        self._confirmed_motion_files_by_group: Dict[str, tuple[str, ...]] = {}
         self._bye_event_id = ""
         self._sakiko_mask_on: Optional[bool] = None
         self._last_click_at = float("-inf")
@@ -344,15 +346,6 @@ class Live2DBehaviorController:
             if audio_url:
                 segment.audio_token = self._request_audio_locked(segment)
 
-            # Queue this after play_motion so the SDK motion cannot overwrite
-            # the expression before the renderer applies it.
-            self._queue_expression_locked(
-                self._select_expression_for_emotion_locked(str(emotion)),
-                cause,
-                segment.turn_id,
-                segment.segment_id,
-            )
-
             self._queue_command_locked(
                 "segment_started",
                 {
@@ -451,6 +444,7 @@ class Live2DBehaviorController:
             self._cancel_motion_locked("model_switch", cause)
             self._state = "switching"
             self._model = dict(model)
+            self._motion_files_by_group = self._read_motion_files_locked(model)
             self._sakiko_mask_on = None
             raw_transition_groups = model.get("transition_groups", ("change_character",))
             if isinstance(raw_transition_groups, (list, tuple)):
@@ -836,6 +830,7 @@ class Live2DBehaviorController:
         transition_groups = self._model_transition_groups
         transition_priority = self._model_transition_priority
         self._confirmed_model = dict(self._model)
+        self._confirmed_motion_files_by_group = dict(self._motion_files_by_group)
         self._model_token = ""
         self._model_cause_event_id = ""
         self._model_turn_id = ""
@@ -858,12 +853,14 @@ class Live2DBehaviorController:
             )
             if str(self._model.get("variant") or "") == "dark":
                 self._sakiko_mask_on = group == "change_character"
-        self._queue_expression_locked(self._default_expression_locked(), cause, turn_id, "")
+        if not available_groups:
+            self._queue_expression_locked(self._default_expression_locked(), cause, turn_id, "")
 
     def _abort_model_switch_locked(self, reason: str) -> None:
         cause = self._model_cause_event_id or self._new_event_id()
         failed_model = dict(self._model)
         self._model = dict(self._confirmed_model)
+        self._motion_files_by_group = dict(self._confirmed_motion_files_by_group)
         self._model_token = ""
         self._model_cause_event_id = ""
         self._model_turn_id = ""
@@ -935,6 +932,14 @@ class Live2DBehaviorController:
             segment_id=segment_id,
             expected_renderers=expected,
         )
+        # One common path resolves every motion's expression from the same
+        # model metadata and policy used by the Pygame adapter.
+        self._queue_expression_locked(
+            self._expression_for_motion_locked(group, index),
+            cause_event_id,
+            turn_id,
+            segment_id,
+        )
         return token
 
     def _request_audio_locked(self, segment: _Segment) -> str:
@@ -987,6 +992,13 @@ class Live2DBehaviorController:
         if motion.purpose == "bye":
             self._queue_close_renderer_locked(motion.cause_event_id, "bye_motion_finished")
             return
+        if motion.purpose == "model_switch":
+            self._queue_expression_locked(
+                self._default_expression_locked(),
+                motion.cause_event_id,
+                motion.turn_id,
+                motion.segment_id,
+            )
         if motion.purpose == "thinking" and self._thinking:
             self._thinking_due = now + self._config.thinking_repeat_delay
 
@@ -1187,16 +1199,23 @@ class Live2DBehaviorController:
 
     def _default_expression_locked(self) -> str:
         supported = self._effective_expression_ids_locked()
-        return select_supported_expression(("idle", "serious"), supported) or ""
+        return select_expression_for_motion("IDLE", None, supported) or ""
 
-    def _select_expression_for_emotion_locked(self, emotion: str) -> str:
+    def _expression_for_motion_locked(self, group: str, index: int) -> str:
         supported = self._effective_expression_ids_locked()
-        if not supported:
-            return ""
-        return select_supported_expression(
-            expression_candidates_for_emotion(emotion),
-            supported,
-        ) or self._default_expression_locked()
+        motion_file = self._motion_files_by_group.get(group, ())
+        selected_file = motion_file[index] if 0 <= index < len(motion_file) else None
+        return select_expression_for_motion(group, selected_file, supported) or ""
+
+    @staticmethod
+    def _read_motion_files_locked(model: Mapping[str, Any]) -> Dict[str, tuple[str, ...]]:
+        model_json_path = str(model.get("model_json_path") or "")
+        if not model_json_path:
+            return {}
+        try:
+            return motion_files_by_group_from_model_json(model_json_path)
+        except (OSError, TypeError, ValueError):
+            return {}
 
     def _queue_expression_locked(
         self,

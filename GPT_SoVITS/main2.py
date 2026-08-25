@@ -112,6 +112,7 @@ def resolve_electron_sakiko_model(sakiko_state: bool) -> dict[str, object] | Non
         return None
     return {
         "model_url": model_url,
+        "model_json_path": model_path,
         "character_folder": "sakiko",
         "character_name": "祥子",
         "theme_color": character_theme_color("祥子"),
@@ -168,6 +169,8 @@ def _build_electron_model_switch(ui_command: dict[str, object]) -> dict[str, obj
         "character_name": character_name,
         "theme_color": character_theme_color(character_name),
     }
+    if os.path.isfile(model_path):
+        descriptor["model_json_path"] = model_path
     if character_folder == "sakiko" and isinstance(sakiko_state, bool):
         descriptor["variant"] = "dark" if sakiko_state else "light"
     return descriptor
