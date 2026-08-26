@@ -82,7 +82,6 @@ class Live2DModule:
         self.BACKGROUND_POSITION=((-1.0, 1.0, 0), (1.0, -1.0, 0), (1.0, 1.0, 0), (-1.0, -1.0, 0))
         self.wavHandler=WavHandler()
         self.lipSyncN:float=1.4
-        self.live2d_this_turn_motion_complete=True
         self.run=True
         self.character_list=[]
         self.character_by_name = {}
@@ -139,7 +138,9 @@ class Live2DModule:
         self.character_by_name = {character.character_name: character for character in characters}
         self.character_by_folder = {character.character_folder_name: character for character in characters}
         if self.character_list:
-            self.switch_live2d_target(self.character_list[0].character_name)
+            # Metadata is needed to construct the window. The model itself is
+            # loaded only after the authoritative owner sends switch_live2d.
+            self.current_character_name = self.character_list[0].character_name
         back_img_png = glob.glob(os.path.join("../live2d_related", "*.png"))
         back_img_jpg = glob.glob(os.path.join("../live2d_related", "*.jpg"))
         if not (back_img_png + back_img_jpg):
@@ -359,17 +360,6 @@ class Live2DModule:
             """Publish runtime capability facts for the shared owner."""
             if renderer_fact_queue is None:
                 return
-            if not isinstance(model, Live2DModelAdapter):
-                renderer_fact_queue.put({
-                    "type": "renderer_unavailable",
-                    "data": {
-                        "renderer_id": "pygame-renderer",
-                        "renderer_instance_id": renderer_instance_id,
-                        "renderer_role": "pygame",
-                        "reason": "live2d_model_unavailable",
-                    },
-                })
-                return
             motion_files = model.motion_files_by_group if isinstance(model, Live2DModelAdapter) else {}
             expression_ids = list(model.expression_ids) if isinstance(model, Live2DModelAdapter) else []
             renderer_fact_queue.put({
@@ -388,11 +378,25 @@ class Live2DModule:
                         "white": "../live2d_related/sakiko/live2D_model/3.model.json",
                         "black": "../live2d_related/sakiko/live2D_model_costume/3.model.json",
                     },
-                    "capabilities": {"motion": True, "audio": True, "lipsync": True},
+                    "capabilities": {
+                        "motion": isinstance(model, Live2DModelAdapter),
+                        "audio": True,
+                        "lipsync": isinstance(model, Live2DModelAdapter),
+                    },
                 },
             })
 
-        emit_renderer_ready()
+        if renderer_fact_queue is not None:
+            renderer_fact_queue.put({
+                "type": "renderer_hello",
+                "data": {
+                    "renderer_id": "pygame-renderer",
+                    "renderer_instance_id": renderer_instance_id,
+                    "renderer_role": "pygame",
+                    "model_token": "",
+                    "model_key": "",
+                },
+            })
 
         def emit_renderer_fact(fact: dict) -> None:
             if fact.get("type") == "motion_finished":
@@ -415,13 +419,10 @@ class Live2DModule:
         renderer_thinking_active = False
 
         def execute_renderer_commands() -> None:
-            nonlocal renderer_audio_token, renderer_thinking_active
+            nonlocal renderer_audio_token, renderer_audio_was_busy, renderer_thinking_active
             if renderer_command_queue is None:
                 return
-            adapter = (
-                PygameRendererCommandAdapter(model, emit_renderer_fact, self._start_audio_runtime)
-                if isinstance(model, Live2DModelAdapter) else None
-            )
+            adapter = PygameRendererCommandAdapter(model, emit_renderer_fact, self._start_audio_runtime)
             while True:
                 try:
                     command = renderer_command_queue.get_nowait()
@@ -470,10 +471,14 @@ class Live2DModule:
                         elif command.get("type") == "toggle_l2d_layout_edit":
                             change_char_queue.put(command.get("data", {}))
                         continue
-                    if adapter is not None and adapter.execute(command) and command.get("type") == "play_audio":
+                    if adapter.execute(command) and command.get("type") == "play_audio":
                         data = command.get("data", {})
                         if isinstance(data, dict):
                             renderer_audio_token = str(data.get("token") or "")
+                            # A successful play call owns an active lifecycle
+                            # even if a zero-length/erroring stream is already
+                            # idle by the first backend poll.
+                            renderer_audio_was_busy = True
 
         def emit_audio_idle_fact() -> None:
             nonlocal renderer_audio_was_busy, renderer_audio_token
@@ -532,7 +537,6 @@ class Live2DModule:
 
         mouse_position_x = 0
 
-        interval_think=1
         logger.info("当前Live2D界面渲染硬件 %s", glGetString(GL_RENDERER).decode())
 
         is_update_mouth_sync = 0
@@ -646,18 +650,13 @@ class Live2DModule:
                     if layout_editing:
                         exit_layout_edit_mode()
                     character_name = str(x.get("character_name") or "")
-                    character_folder_name = str(x.get("character_folder_name") or "")
                     renderer_model_token = str(x.get("model_token") or "")
                     model_json = x.get("model_json") or x.get("model_url")
-                    if isinstance(model_json, str) and model_json and not character_name and not character_folder_name:
-                        target_model_path = model_json
-                    else:
-                        target_model_path = self.switch_live2d_target(
-                            character_name,
-                            model_json if isinstance(model_json, str) and model_json else None,
-                            character_folder_name=character_folder_name,
-                            use_default=False,
-                        )
+                    # Model selection is authoritative upstream. Pygame only
+                    # loads the explicit path carried by the exact command.
+                    target_model_path = model_json if isinstance(model_json, str) and model_json else None
+                    if character_name and character_name in self.character_by_name:
+                        self.current_character_name = character_name
                     try:
                         model.dispose()
                     except Exception:
@@ -754,11 +753,6 @@ class Live2DModule:
                 pygame.display.set_caption(f"{self.current_character.character_name}思考中")
             else:
                 pygame.display.set_caption(f"{self.current_character.character_name}")
-
-            audio_busy = pygame.mixer.music.get_busy()
-            self.live2d_this_turn_motion_complete=not audio_busy
-            # 更新到共享变量
-            motion_complete_value.value = self.live2d_this_turn_motion_complete
 
             glClear(GL_COLOR_BUFFER_BIT)
             # 更新live2d到缓冲区

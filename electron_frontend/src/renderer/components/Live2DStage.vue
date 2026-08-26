@@ -95,9 +95,8 @@ onMounted(async () => {
   } catch (e) {
     console.error('[Live2DStage] Failed to load model:', e)
     emit('renderer-fact', {
-      type: 'command_failed',
+      type: 'renderer_unavailable',
       data: {
-        command_type: 'switch_live2d',
         model_token: props.modelToken || '',
         renderer_id: props.rendererId || props.modelKey || 'electron-renderer',
         reason: String(e),

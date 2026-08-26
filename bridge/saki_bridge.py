@@ -43,15 +43,12 @@ class Bridge:
         self._reader_thread: Optional[threading.Thread] = None
         self._renderer_command_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._snapshot_model_switch = None
         self._snapshot_thinking = None
         self._renderer_ids_by_writer = {}
 
     async def _on_renderer_connect(self, writer):
         """Replay cached exact commands to one newly connected renderer."""
         commands = []
-        if self._snapshot_model_switch is not None:
-            commands.append(self._untarget_command(self._snapshot_model_switch))
         if self._snapshot_thinking is not None:
             commands.append(self._untarget_command(self._snapshot_thinking))
         if commands:
@@ -69,11 +66,28 @@ class Bridge:
     def _cache_command(self, command):
         if not isinstance(command, dict):
             return
+        if not self._targets_electron(command):
+            return
         command_type = command.get('type')
-        if command_type == 'switch_live2d':
-            self._snapshot_model_switch = command
-        elif command_type == 'thinking_changed':
+        if command_type == 'thinking_changed':
             self._snapshot_thinking = command
+
+    @staticmethod
+    def _targets_electron(command):
+        """Return whether an exact command applies to an Electron runtime."""
+        data = command.get('data') or {}
+        if not isinstance(data, dict):
+            return True
+        targets = data.get('target_renderer_ids')
+        explicit_targets = []
+        if isinstance(targets, (list, tuple, set, frozenset)):
+            explicit_targets.extend(str(target) for target in targets if target)
+        target = data.get('target_renderer_id')
+        if target:
+            explicit_targets.append(str(target))
+        return not explicit_targets or any(
+            target != 'pygame-renderer' for target in explicit_targets
+        )
 
     async def _on_renderer_message(self, message, writer=None):
         """Forward renderer facts verbatim; the shared state consumes them."""

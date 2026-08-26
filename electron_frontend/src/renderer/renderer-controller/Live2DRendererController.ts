@@ -250,6 +250,10 @@ export class Live2DRendererController {
   }
 
   private stopAudio(): void {
+    const stoppedToken = this.audioToken
+    const stoppedTurnId = this.audioTurnId
+    const stoppedSegmentId = this.audioSegmentId
+    const reportStopped = Boolean(this.currentAudio && this.audioOwner && stoppedToken)
     if (this.currentAudio && this.audioOwner) this.reportMouthAmplitude(0, {})
     if (this.currentAudio) {
       this.currentAudio.pause()
@@ -268,6 +272,18 @@ export class Live2DRendererController {
     this.audioToken = ''
     this.audioTurnId = ''
     this.audioSegmentId = ''
+    if (reportStopped) {
+      this.report({
+        type: 'audio_ended',
+        data: {
+          token: stoppedToken,
+          turn_id: stoppedTurnId,
+          segment_id: stoppedSegmentId,
+          renderer_id: this.rendererId,
+          reason: 'runtime_stopped',
+        },
+      })
+    }
   }
 
   private initParameters(): void {
