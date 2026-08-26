@@ -26,8 +26,9 @@ if (theme === 'dark') {
 
 async function bootstrap() {
   try {
-    // Use a relative URL so production ``file://`` loads resolve beside the
-    // renderer bundle as well as Vite's development server root.
+    // Production Electron loads the renderer with file://.  Keep this
+    // relative so the packaged dist/renderer/sdk files are found; an
+    // absolute /sdk path resolves to the drive root under file://.
     await loadScript('./sdk/live2d.min.js')
     await loadScript('./sdk/Live2DFramework.js')
     console.log('[SDK] Cubism 2 SDK loaded')

@@ -20,12 +20,6 @@ const api = {
     return () => ipcRenderer.removeListener('window-state', handler)
   },
 
-  getMousePosition: () =>
-    ipcRenderer.invoke('get-mouse-position'),
-
-  getWindowBounds: () =>
-    ipcRenderer.invoke('get-window-bounds'),
-
   toggleAlwaysOnTop: () =>
     ipcRenderer.invoke('toggle-always-on-top'),
 

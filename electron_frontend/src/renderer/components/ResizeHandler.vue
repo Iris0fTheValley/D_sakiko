@@ -1,21 +1,44 @@
 <script setup lang="ts">
 declare const electronAPI: {
   resizeWindow: (dx: number, dy: number, dir: string) => Promise<void>
+  setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>
 }
 
 function handleResizeStart(event: MouseEvent, direction: string) {
   event.preventDefault()
   event.stopPropagation()
+  void electronAPI.setIgnoreMouseEvents(false, { forward: true })
   let startX = event.screenX
   let startY = event.screenY
+  let frame: number | null = null
+  let pendingDeltaX = 0
+  let pendingDeltaY = 0
+
+  function flushResize() {
+    frame = null
+    if (pendingDeltaX === 0 && pendingDeltaY === 0) return
+    const deltaX = pendingDeltaX
+    const deltaY = pendingDeltaY
+    pendingDeltaX = 0
+    pendingDeltaY = 0
+    void electronAPI.resizeWindow(deltaX, deltaY, direction)
+  }
+
+  function scheduleResize() {
+    if (frame !== null) return
+    frame = requestAnimationFrame(flushResize)
+  }
+
   function onMouseMove(e: MouseEvent) {
-    const deltaX = e.screenX - startX
-    const deltaY = e.screenY - startY
+    pendingDeltaX += e.screenX - startX
+    pendingDeltaY += e.screenY - startY
     startX = e.screenX
     startY = e.screenY
-    electronAPI.resizeWindow(deltaX, deltaY, direction)
+    scheduleResize()
   }
   function onMouseUp() {
+    if (frame !== null) cancelAnimationFrame(frame)
+    flushResize()
     document.removeEventListener('mousemove', onMouseMove)
     document.removeEventListener('mouseup', onMouseUp)
   }
@@ -46,6 +69,8 @@ function handleResizeStart(event: MouseEvent, direction: string) {
   bottom: 0;
   pointer-events: none;
   z-index: 9999;
+  border-radius: var(--window-radius, 16px);
+  overflow: hidden;
 }
 
 .handle {
@@ -58,8 +83,8 @@ function handleResizeStart(event: MouseEvent, direction: string) {
 .handle.e { top: 5px; bottom: 5px; right: 0; width: 5px; cursor: e-resize; }
 .handle.w { top: 5px; bottom: 5px; left: 0; width: 5px; cursor: w-resize; }
 
-.handle.nw { top: 0; left: 0; width: 10px; height: 10px; cursor: nw-resize; }
-.handle.ne { top: 0; right: 0; width: 10px; height: 10px; cursor: ne-resize; }
-.handle.sw { bottom: 0; left: 0; width: 10px; height: 10px; cursor: sw-resize; }
-.handle.se { bottom: 0; right: 0; width: 10px; height: 10px; cursor: se-resize; }
+.handle.nw { top: 0; left: 0; width: 10px; height: 10px; cursor: nw-resize; border-top-left-radius: var(--window-radius, 16px); }
+.handle.ne { top: 0; right: 0; width: 10px; height: 10px; cursor: ne-resize; border-top-right-radius: var(--window-radius, 16px); }
+.handle.sw { bottom: 0; left: 0; width: 10px; height: 10px; cursor: sw-resize; border-bottom-left-radius: var(--window-radius, 16px); }
+.handle.se { bottom: 0; right: 0; width: 10px; height: 10px; cursor: se-resize; border-bottom-right-radius: var(--window-radius, 16px); }
 </style>

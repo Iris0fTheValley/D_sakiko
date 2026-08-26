@@ -44,9 +44,9 @@ function createWindow() {
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   mainWindow.setFullScreenable(false)
   mainWindow.on('ready-to-show', () => mainWindow!.show())
-  mainWindow.on('ready-to-show', () => publishWindowState(true))
-  mainWindow.on('move', () => publishWindowState())
-  mainWindow.on('resize', () => publishWindowState())
+  mainWindow.on('ready-to-show', publishWindowState)
+  mainWindow.on('move', publishWindowState)
+  mainWindow.on('resize', publishWindowState)
   mainWindow.on('closed', () => {
     if (windowStateTimer) clearInterval(windowStateTimer)
     windowStateTimer = null
@@ -70,6 +70,10 @@ function createWindow() {
   }
 
   ipcMain.on('window-state-ready', () => publishWindowState(true))
+
+  // Cursor coordinates are only available in the main process while the
+  // transparent window is click-through. Publish one shared snapshot so the
+  // renderer never performs hover-time IPC round trips.
   windowStateTimer = setInterval(publishWindowState, 16)
 
   // Resize
@@ -95,16 +99,6 @@ function createWindow() {
   // 鼠标穿透
   ipcMain.handle('set-ignore-mouse-events', (_e, ignore, options) => {
     mainWindow?.setIgnoreMouseEvents(ignore, options)
-  })
-
-  // 获取鼠标屏幕坐标（穿透模式下 renderer 收不到 mousemove）
-  ipcMain.handle('get-mouse-position', () => {
-    const p = screen.getCursorScreenPoint()
-    return { x: p.x, y: p.y }
-  })
-
-  ipcMain.handle('get-window-bounds', () => {
-    return mainWindow?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 }
   })
 
   // 置顶
