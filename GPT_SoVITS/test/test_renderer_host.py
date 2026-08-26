@@ -205,6 +205,27 @@ class RendererHostTest(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(commands.get_nowait()["type"], "play_motion")
 
+    def test_service_keeps_bye_motion_alive_until_completion(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner())
+        facts.put({"type": "renderer_ready", "data": {"motion_groups": {"bye": 1}}})
+        intents.put({"type": "bye", "data": {}})
+        stop = Event()
+        worker = Thread(target=service.run, args=(stop,), daemon=True)
+        worker.start()
+        self.assertTrue(service.wait_for_bye(0.5))
+        bye = commands.get(timeout=0.5)
+        self.assertEqual(bye["type"], "play_motion")
+        token = bye["data"]["token"]
+        self.assertFalse(service.wait_for_bye_completion(0.01))
+        facts.put({"type": "motion_finished", "data": {"token": token}})
+        self.assertTrue(service.wait_for_bye_completion(0.5))
+        stop.set()
+        worker.join(0.5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(commands.get(timeout=0.5)["type"], "close_renderer")
+        self.assertTrue(service.wait_for_bye_completion(0.1))
+
     def test_service_consumes_bye_when_renderer_never_becomes_ready(self):
         intents, facts, commands = Queue(), Queue(), Queue()
         service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner())

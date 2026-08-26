@@ -759,7 +759,7 @@ if __name__=='__main__':
     # Let the authoritative service publish the exact bye/close command before
     # its lifecycle event is stopped. This avoids a queue scheduling race.
     try:
-        shared_renderer_service.wait_for_bye(timeout_seconds=2.0)
+        shared_renderer_service.wait_for_bye_completion(timeout_seconds=6.0)
     except Exception:
         pass
     owner_stop_event.set()

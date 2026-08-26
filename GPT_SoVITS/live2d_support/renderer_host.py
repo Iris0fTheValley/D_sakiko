@@ -972,6 +972,7 @@ class SharedRendererService:
         self._host = SharedRendererHost(self._emit_command, owner, legacy_motion_complete_value)
         self._pending_intents = deque()
         self._bye_handled = Event()
+        self._bye_completed = Event()
 
     def _record_trace(self, kind: str, message: Mapping[str, Any]) -> None:
         if self._trace is None:
@@ -989,6 +990,8 @@ class SharedRendererService:
     def _emit_command(self, command: dict[str, Any]) -> None:
         self._record_trace("command", command)
         self._commands.put(command)
+        if command.get("type") == "close_renderer":
+            self._bye_completed.set()
 
     def run_once(self) -> int:
         handled = 0
@@ -1075,6 +1078,10 @@ class SharedRendererService:
     def wait_for_bye(self, timeout_seconds: float = 2.0) -> bool:
         """Wait until the queued bye intent has become an exact runtime command."""
         return self._bye_handled.wait(max(0.0, float(timeout_seconds)))
+
+    def wait_for_bye_completion(self, timeout_seconds: float = 6.0) -> bool:
+        """Wait until the exact bye lifecycle has emitted close_renderer."""
+        return self._bye_completed.wait(max(0.0, float(timeout_seconds)))
 
     def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
         """Run until the caller's lifecycle owner requests a clean stop."""
