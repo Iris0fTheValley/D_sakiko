@@ -4,6 +4,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
+
+def renderer_command_is_frame_barrier(command: Mapping[str, object]) -> bool:
+    """Return whether a command must complete before later commands run."""
+
+    return command.get("type") == "switch_live2d"
+
 class ExactMotionRuntime(Protocol):
     def StartMotion(self, group_name: str, motion_index: int, priority: int, on_start=None,
                     on_finish=None, position=None, auto_expression: bool = True) -> bool: ...
@@ -17,6 +23,11 @@ class PygameRendererCommandAdapter:
     def __init__(self, runtime: ExactMotionRuntime, emit_fact: Callable[[dict], None],
                  start_audio: Callable[[str], bool] | None = None) -> None:
         self._runtime, self._emit_fact, self._start_audio = runtime, emit_fact, start_audio
+
+    def bind_runtime(self, runtime: ExactMotionRuntime) -> None:
+        """Bind subsequent exact commands to the currently loaded runtime."""
+
+        self._runtime = runtime
 
     def execute(self, command: Mapping[str, object]) -> bool:
         data = command.get("data")

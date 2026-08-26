@@ -32,7 +32,10 @@ from live2d_support.runtime_adapter import (
     load_live2d_runtime,
     release_live2d_runtime,
 )
-from live2d_support.shared_segment_executor import PygameRendererCommandAdapter
+from live2d_support.shared_segment_executor import (
+    PygameRendererCommandAdapter,
+    renderer_command_is_frame_barrier,
+)
 from live2d_support.runtime_window import recreate_runtime_window
 from live2d_support.layout import (
     Live2DLayout,
@@ -415,14 +418,24 @@ class Live2DModule:
 
         renderer_audio_token = ""
         renderer_audio_was_busy = False
+        renderer_model_switch_pending = False
+        renderer_adapter = None
         renderer_local_controls = queue.Queue()
         renderer_thinking_active = False
 
         def execute_renderer_commands() -> None:
             nonlocal renderer_audio_token, renderer_audio_was_busy, renderer_thinking_active
+            nonlocal renderer_model_switch_pending, renderer_adapter
             if renderer_command_queue is None:
                 return
-            adapter = PygameRendererCommandAdapter(model, emit_renderer_fact, self._start_audio_runtime)
+            # The switch control is consumed later in this frame.  Do not let
+            # the next frame drain following commands through the old model.
+            if renderer_model_switch_pending:
+                return
+            if renderer_adapter is None:
+                renderer_adapter = PygameRendererCommandAdapter(model, emit_renderer_fact, self._start_audio_runtime)
+            else:
+                renderer_adapter.bind_runtime(model)
             while True:
                 try:
                     command = renderer_command_queue.get_nowait()
@@ -446,7 +459,13 @@ class Live2DModule:
                             # Preserve the exact command envelope while the
                             # local loop consumes its flattened runtime data.
                             renderer_local_controls.put({"type": "switch_live2d", **switch_data})
-                        continue
+                        # A model switch is a runtime barrier.  Leave any
+                        # following exact commands in the renderer queue so
+                        # the next frame rebinds the adapter to the newly
+                        # loaded model instead of the disposed one.
+                        if renderer_command_is_frame_barrier(command):
+                            renderer_model_switch_pending = True
+                            break
                     if command.get("type") in {"stop_audio", "reset"}:
                         try:
                             pygame.mixer.music.stop()
@@ -471,7 +490,7 @@ class Live2DModule:
                         elif command.get("type") == "toggle_l2d_layout_edit":
                             change_char_queue.put(command.get("data", {}))
                         continue
-                    if adapter.execute(command) and command.get("type") == "play_audio":
+                    if renderer_adapter.execute(command) and command.get("type") == "play_audio":
                         data = command.get("data", {})
                         if isinstance(data, dict):
                             renderer_audio_token = str(data.get("token") or "")
@@ -728,6 +747,9 @@ class Live2DModule:
                         current_layout = Live2DLayout(scale=1.0, offset_x=0.0, offset_y=0.0)
                     emit_renderer_ready()
                     overlay.set_text(self.current_character.character_name, '...')
+                    if renderer_adapter is not None:
+                        renderer_adapter.bind_runtime(model)
+                    renderer_model_switch_pending = False
                 elif command_type == "switch_l2d_fps":
                     fps = int(x.get("fps"))
                     self.target_fps = fps
