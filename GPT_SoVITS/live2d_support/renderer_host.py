@@ -151,9 +151,19 @@ class SharedRendererHost:
             self._renderer_instances[renderer_id] = str(data.get("renderer_instance_id") or renderer_id)
             self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
             self._renderer_model_keys[renderer_id] = str(data.get("model_key") or "")
-            self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
             self._maybe_sync_noncanonical_renderer(renderer_id)
             return True
+        if message.get("type") == "renderer_unavailable":
+            # A runtime that cannot load a model must not remain an execution
+            # target. Treat it like a disconnect while retaining the fact for
+            # diagnostics at the bridge boundary.
+            message = {
+                "type": "renderer_disconnected",
+                "data": {
+                    "renderer_id": data.get("renderer_id"),
+                    "renderer_instance_id": data.get("renderer_instance_id"),
+                },
+            }
         if message.get("type") == "renderer_disconnected":
             renderer_id = str(data.get("renderer_id") or "")
             if not renderer_id or renderer_id not in self._renderer_ids:
@@ -386,12 +396,28 @@ class SharedRendererHost:
     def _emit_audio(self, command: StartAudio | None, segment) -> None:
         if isinstance(command, StartAudio) and segment is not None:
             payload = audio_command(command, segment)
+            audio_path = str(payload.get("data", {}).get("path") or "")
+            electron_audio_url = self._electron_audio_url(audio_path)
+            if electron_audio_url:
+                payload.setdefault("data", {})["electron_audio_url"] = electron_audio_url
             if self._renderer_ids:
                 payload.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
                 audio_owner = self._audio_owner_by_command.get(command.command_id) or self._audio_owner_renderer_id()
                 if audio_owner:
                     payload.setdefault("data", {})["target_renderer_id"] = audio_owner
             self._emit(payload)
+
+    @staticmethod
+    def _electron_audio_url(audio_path: str) -> str:
+        """Expose a local project audio path through Bridge's HTTP server."""
+        normalized = str(audio_path or "").replace("\\", "/")
+        if not normalized or normalized.startswith(("http://", "https://")):
+            return normalized if normalized.startswith(("http://", "https://")) else ""
+        marker = "reference_audio/"
+        if marker in normalized:
+            relative = normalized.split(marker, 1)[1]
+            return f"http://127.0.0.1:9877/audio/reference_audio/{relative}"
+        return ""
 
     def _audio_owner_renderer_id(self) -> str | None:
         """Select one runtime for audible playback while motions fan out."""

@@ -163,6 +163,9 @@ function connectWebSocket() {
           if (command.type === 'switch_live2d' && commandData.electron_model_url) {
             commandData.model_url = commandData.electron_model_url
           }
+          if (command.type === 'play_audio' && commandData.electron_audio_url) {
+            commandData.path = commandData.electron_audio_url
+          }
           if (command.type === 'switch_live2d' && commandData.model_url) {
             pendingModelToken.value = String(commandData.model_token || '')
             reloadCustomModel(String(commandData.model_url), String(commandData.character_folder || currentCharKey.value))

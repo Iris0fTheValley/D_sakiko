@@ -359,6 +359,17 @@ class Live2DModule:
             """Publish runtime capability facts for the shared owner."""
             if renderer_fact_queue is None:
                 return
+            if not isinstance(model, Live2DModelAdapter):
+                renderer_fact_queue.put({
+                    "type": "renderer_unavailable",
+                    "data": {
+                        "renderer_id": "pygame-renderer",
+                        "renderer_instance_id": renderer_instance_id,
+                        "renderer_role": "pygame",
+                        "reason": "live2d_model_unavailable",
+                    },
+                })
+                return
             motion_files = model.motion_files_by_group if isinstance(model, Live2DModelAdapter) else {}
             expression_ids = list(model.expression_ids) if isinstance(model, Live2DModelAdapter) else []
             renderer_fact_queue.put({
@@ -429,7 +440,11 @@ class Live2DModule:
                         self.run = False
                         continue
                     if command.get("type") == "switch_live2d":
-                        renderer_local_controls.put(command.get("data", {}))
+                        switch_data = command.get("data", {})
+                        if isinstance(switch_data, dict):
+                            # Preserve the exact command envelope while the
+                            # local loop consumes its flattened runtime data.
+                            renderer_local_controls.put({"type": "switch_live2d", **switch_data})
                         continue
                     if command.get("type") in {"stop_audio", "reset"}:
                         try:

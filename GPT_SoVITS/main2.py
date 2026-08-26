@@ -4,6 +4,8 @@ import os,sys
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 sys.path.insert(0, script_dir)
 from ui_main.threads.update_config_thread import UpdateConfigThread
 

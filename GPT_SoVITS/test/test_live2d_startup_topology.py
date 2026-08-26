@@ -31,6 +31,7 @@ class Live2DStartupTopologyTest(unittest.TestCase):
 
     def test_main_starts_one_owner_service_and_shared_electron_bridge(self):
         source = (ROOT / "main2.py").read_text(encoding="utf-8")
+        self.assertIn("project_root not in sys.path", source)
         self.assertEqual(source.count("authoritative_owner=AuthoritativeLive2DOwner()"), 1)
         self.assertIn("SharedRendererService(", source)
         self.assertIn("FanoutQueue(pygame_renderer_command_queue, electron_renderer_command_queue)", source)
@@ -41,6 +42,7 @@ class Live2DStartupTopologyTest(unittest.TestCase):
         source = (ROOT / "live2d_module.py").read_text(encoding="utf-8")
         self.assertIn('"pygame-renderer" not in target_ids', source)
         self.assertIn('str(target_id) != "pygame-renderer"', source)
+        self.assertIn('{"type": "switch_live2d", **switch_data}', source)
 
     def test_control_and_thinking_inputs_enter_owner_ingress(self):
         source = (ROOT / "main2.py").read_text(encoding="utf-8")

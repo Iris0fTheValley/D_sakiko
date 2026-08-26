@@ -21,6 +21,18 @@ class RendererHostTest(unittest.TestCase):
         self.assertTrue(self.host.handle_renderer_fact({"type":"motion_started","data":{"token":token}}))
         self.assertEqual(self.out[1]["type"], "play_audio"); self.assertEqual(self.out[1]["data"]["path"], "a.wav")
 
+    def test_audio_command_exposes_project_path_to_electron_transport(self):
+        self.assertTrue(self.host.start_emotion_segment(
+            turn_id="t", segment_id="s", emotion="LABEL_0",
+            audio_path="../reference_audio/generated_audios_temp/output.wav",
+        ))
+        token = self.out[0]["data"]["token"]
+        self.host.handle_renderer_fact({"type": "motion_started", "data": {"token": token}})
+        self.assertEqual(
+            self.out[-1]["data"]["electron_audio_url"],
+            "http://127.0.0.1:9877/audio/reference_audio/generated_audios_temp/output.wav",
+        )
+
     def test_audio_fanout_selects_one_runtime_owner(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","motion_groups":{"happiness":1}}})
@@ -310,6 +322,20 @@ class RendererHostTest(unittest.TestCase):
         self.assertEqual(self.out[-1]["type"], "play_motion")
         self.assertFalse(host.handle_renderer_fact({"type": "motion_finished", "data": {
             "renderer_id": "pygame", "token": self.out[-1]["data"]["token"],
+        }}))
+
+    def test_unavailable_renderer_is_removed_from_execution_targets(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one",
+            "renderer_role": "pygame", "motion_groups": {"happiness": 1},
+        }})
+        self.assertTrue(host.handle_renderer_fact({"type": "renderer_unavailable", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one",
+            "reason": "live2d_model_unavailable",
+        }}))
+        self.assertFalse(host.handle_renderer_fact({"type": "motion_started", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one", "token": "stale",
         }}))
 
     def test_secondary_electron_receives_canonical_model_handshake(self):

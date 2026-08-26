@@ -26,8 +26,10 @@ if (theme === 'dark') {
 
 async function bootstrap() {
   try {
-    await loadScript('/sdk/live2d.min.js')
-    await loadScript('/sdk/Live2DFramework.js')
+    // Use a relative URL so production ``file://`` loads resolve beside the
+    // renderer bundle as well as Vite's development server root.
+    await loadScript('./sdk/live2d.min.js')
+    await loadScript('./sdk/Live2DFramework.js')
     console.log('[SDK] Cubism 2 SDK loaded')
   } catch (e) {
     console.warn('[SDK] Cubism 2 SDK not found:', e)
