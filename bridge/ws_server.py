@@ -17,11 +17,12 @@ GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 class WSServer:
-    def __init__(self, host="localhost", port=9876, on_message=None, on_connect=None):
+    def __init__(self, host="localhost", port=9876, on_message=None, on_connect=None, on_disconnect=None):
         self.host = host
         self.port = port
         self.on_message = on_message
         self.on_connect = on_connect
+        self.on_disconnect = on_disconnect
         try:
             self._message_accepts_writer = on_message is not None and len(inspect.signature(on_message).parameters) >= 2
         except (TypeError, ValueError):
@@ -108,6 +109,13 @@ class WSServer:
             pass
         finally:
             self._clients.discard(writer)
+            if self.on_disconnect is not None:
+                try:
+                    result = self.on_disconnect(writer)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    pass
             try:
                 writer.close()
             except Exception:

@@ -32,6 +32,7 @@ class SharedRendererHost:
         self._scheduled_tokens: dict[str, str] = {}
         self._renderer_is_sakiko = False
         self._renderer_ids: set[str] = set()
+        self._retired_renderer_ids: set[str] = set()
         self._ready = False
         self._sakiko_conversion = owner.sakiko_conversion
         self._pending_conversion: SakikoConversionDecision | None = None
@@ -49,7 +50,9 @@ class SharedRendererHost:
         self._renderer_roles: dict[str, str] = {}
         self._renderer_model_keys: dict[str, str] = {}
         self._renderer_instances: dict[str, str] = {}
+        self._renderer_tokens: dict[str, str] = {}
         self._renderer_catalogs: dict[str, tuple[str, dict[str, Any], tuple[str, ...]]] = {}
+        self._audio_owner_by_command: dict[str, str] = {}
 
     def start_bye(self) -> bool:
         if self._bye_requested:
@@ -83,10 +86,18 @@ class SharedRendererHost:
         if command_type == "start_talking":
             return self._emit_scheduled(self._scheduler.request_motion("talking_motion", 4, "talking"))
         if command_type == "stop_talking":
+            self._scheduled_tokens = {
+                token: purpose for token, purpose in self._scheduled_tokens.items()
+                if purpose != "talking"
+            }
+            self._scheduler.stop_talking()
             self._emit({"type": "stop_motion", "data": {}})
             return True
         if command_type == "cancel_turn":
             self._behavior.cancel()
+            self._audio_owner_by_command.clear()
+            self._scheduled_tokens.clear()
+            self._scheduler.reset_after_cancel()
             self._emit({"type": "stop_audio", "data": {}})
             self._emit({"type": "stop_motion", "data": {}})
             self._emit({"type": "reset", "data": {}})
@@ -130,10 +141,48 @@ class SharedRendererHost:
         data = message.get("data")
         if not isinstance(data, Mapping):
             return False
+        if message.get("type") == "renderer_hello":
+            renderer_id = str(data.get("renderer_id") or "")
+            if not renderer_id:
+                return False
+            self._retired_renderer_ids.discard(renderer_id)
+            self._renderer_ids.add(renderer_id)
+            self._renderer_roles[renderer_id] = str(data.get("renderer_role") or "")
+            self._renderer_instances[renderer_id] = str(data.get("renderer_instance_id") or renderer_id)
+            self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
+            self._renderer_model_keys[renderer_id] = str(data.get("model_key") or "")
+            self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
+            self._maybe_sync_noncanonical_renderer(renderer_id)
+            return True
+        if message.get("type") == "renderer_disconnected":
+            renderer_id = str(data.get("renderer_id") or "")
+            if not renderer_id or renderer_id not in self._renderer_ids:
+                return False
+            instance_id = str(data.get("renderer_instance_id") or "")
+            if instance_id and self._renderer_instances.get(renderer_id) not in {None, instance_id}:
+                return False
+            self._renderer_ids.discard(renderer_id)
+            self._retired_renderer_ids.add(renderer_id)
+            self._renderer_roles.pop(renderer_id, None)
+            self._renderer_instances.pop(renderer_id, None)
+            self._renderer_tokens.pop(renderer_id, None)
+            self._renderer_model_keys.pop(renderer_id, None)
+            self._renderer_catalogs.pop(renderer_id, None)
+            self._model_urls_by_renderer.pop(renderer_id, None)
+            if self._pending_conversion is not None:
+                self._pending_conversion_renderers.discard(renderer_id)
+                self._finish_pending_conversion_if_ready()
+            self._apply_canonical_catalog()
+            self._ready = bool(self._renderer_ids)
+            return True
         if message.get("type") == "renderer_ready":
             renderer_id = str(data.get("renderer_id") or "")
             renderer_instance_id = str(data.get("renderer_instance_id") or renderer_id or "anonymous")
             if renderer_id:
+                previous_instance = self._renderer_instances.get(renderer_id)
+                if previous_instance is not None and previous_instance != renderer_instance_id:
+                    return False
+                self._retired_renderer_ids.discard(renderer_id)
                 self._renderer_ids.add(renderer_id)
                 self._renderer_roles[renderer_id] = str(data.get("renderer_role") or "")
                 self._renderer_instances[renderer_id] = renderer_instance_id
@@ -158,11 +207,17 @@ class SharedRendererHost:
             self._renderer_is_sakiko = model_key.lower() == "sakiko"
             if renderer_id:
                 self._renderer_model_keys[renderer_id] = model_key
+                self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
             urls = data.get("model_urls")
             if isinstance(urls, Mapping):
                 normalized_urls = {str(key): str(value) for key, value in urls.items() if value}
                 self._model_urls_by_renderer[renderer_id] = normalized_urls
                 self._model_urls = normalized_urls
+            if renderer_id and self._pending_conversion is None and self._conversion_replay_switch is None:
+                self._maybe_sync_noncanonical_renderer(renderer_id)
+                for secondary_id in sorted(self._renderer_ids):
+                    if secondary_id != renderer_id:
+                        self._maybe_sync_noncanonical_renderer(secondary_id)
             if self._pending_conversion is not None and renderer_id:
                 expected_token = self._pending_conversion_model_token
                 actual_token = str(data.get("model_token") or "")
@@ -173,17 +228,7 @@ class SharedRendererHost:
                     self._emit({"type": "switch_live2d", "data": switch})
                 else:
                     self._pending_conversion_renderers.discard(renderer_id)
-                if not self._pending_conversion_renderers:
-                    pending, self._pending_conversion = self._pending_conversion, None
-                    self._pending_conversion_model_token = ""
-                    switch = dict(self._pending_conversion_switch or {})
-                    self._pending_conversion_switch = None
-                    self._conversion_replay_switch = switch or None
-                    self._conversion_replay_renderers = {
-                        self._renderer_instance_key(current_id)
-                        for current_id in self._renderer_ids
-                    }
-                    self._emit_conversion_motion(pending)
+                self._finish_pending_conversion_if_ready()
             elif renderer_id and self._conversion_replay_switch is not None:
                 # A renderer that joins after the conversion barrier must be
                 # brought to the owner's current model and receive the exact
@@ -202,8 +247,15 @@ class SharedRendererHost:
                     self._emit(motion)
             return True
         fact_renderer_id = str(data.get("renderer_id") or "")
+        if fact_renderer_id in self._retired_renderer_ids:
+            return False
         if self._renderer_ids and fact_renderer_id and fact_renderer_id not in self._renderer_ids:
             return False
+        if fact_renderer_id:
+            fact_instance = str(data.get("renderer_instance_id") or "")
+            current_instance = self._renderer_instances.get(fact_renderer_id)
+            if fact_instance and current_instance and fact_instance != current_instance:
+                return False
         if message.get("type") == "renderer_intent" and data.get("intent") == "click":
             command = self._scheduler.click(is_sakiko=self._canonical_renderer_is_sakiko())
             return self._emit_scheduled(command)
@@ -223,11 +275,15 @@ class SharedRendererHost:
         active = self._behavior.active_command
         if fact == "motion_started":
             if active is not None and token == active.command_id:
+                if fact_renderer_id and token not in self._audio_owner_by_command:
+                    self._audio_owner_by_command[token] = fact_renderer_id
                 self._scheduler.motion_started("emotion")
             self._emit_audio(self._behavior.motion_started(token), active)
             return True
         if fact == "motion_rejected":
             if active is not None and token == active.command_id:
+                if fact_renderer_id and token not in self._audio_owner_by_command:
+                    self._audio_owner_by_command[token] = fact_renderer_id
                 self._scheduler.motion_finished("emotion")
             self._emit_audio(self._behavior.motion_rejected(token), active)
             return True
@@ -248,12 +304,16 @@ class SharedRendererHost:
             handled = self._behavior.audio_ended(token)
             if handled:
                 self._scheduler.set_audio_busy(False)
+                self._audio_owner_by_command.pop(token, None)
             return handled
         if fact == "command_failed":
+            phase = str(data.get("phase") or "unknown")
             self._emit_audio(
-                self._behavior.command_failed(token, str(data.get("phase") or "unknown")),
+                self._behavior.command_failed(token, phase),
                 active,
             )
+            if phase != "motion_start":
+                self._audio_owner_by_command.pop(token, None)
             return True
         return False
 
@@ -328,21 +388,17 @@ class SharedRendererHost:
             payload = audio_command(command, segment)
             if self._renderer_ids:
                 payload.setdefault("data", {})["target_renderer_ids"] = sorted(self._renderer_ids)
-                audio_owner = self._audio_owner_renderer_id()
+                audio_owner = self._audio_owner_by_command.get(command.command_id) or self._audio_owner_renderer_id()
                 if audio_owner:
                     payload.setdefault("data", {})["target_renderer_id"] = audio_owner
             self._emit(payload)
 
     def _audio_owner_renderer_id(self) -> str | None:
         """Select one runtime for audible playback while motions fan out."""
-        for role in ("pygame", "electron"):
-            candidates = sorted(
-                renderer_id for renderer_id in self._renderer_ids
-                if self._renderer_roles.get(renderer_id) == role
-            )
-            if candidates:
-                return candidates[0]
-        return None
+        # When lifecycle facts omit their source, use a neutral deterministic
+        # choice. A role-specific preference would make Pygame an implicit
+        # second audio owner.
+        return sorted(self._renderer_ids)[0] if self._renderer_ids else None
 
     def _canonical_renderer_is_sakiko(self) -> bool:
         """Use one stable runtime role when multiple renderer facts disagree."""
@@ -382,6 +438,72 @@ class SharedRendererHost:
 
     def _renderer_instance_key(self, renderer_id: str) -> str:
         return f"{renderer_id}:{self._renderer_instances.get(renderer_id, renderer_id)}"
+
+    def _maybe_sync_noncanonical_renderer(self, renderer_id: str) -> None:
+        """Bring a newly connected secondary runtime to the canonical model.
+
+        Renderer ``ready`` facts are capabilities, not business decisions. If
+        the canonical runtime already has a model and a secondary Electron
+        runtime reports a different token/key, issue one exact switch command
+        so both backends execute the same owner-selected model.
+        """
+        canonical_id = self._canonical_renderer_id()
+        if canonical_id is None or canonical_id == renderer_id:
+            return
+        canonical_key = self._renderer_model_keys.get(canonical_id, "")
+        current_key = self._renderer_model_keys.get(renderer_id, "")
+        canonical_token = self._renderer_model_token(canonical_id)
+        current_token = self._renderer_model_token(renderer_id)
+        if canonical_key == current_key and canonical_token == current_token:
+            return
+        urls = self._model_urls_by_renderer.get(canonical_id, {})
+        model_url = str(urls.get("model_json") or urls.get(canonical_key) or "")
+        if not model_url and canonical_key.lower() == "sakiko":
+            model_url = str(urls.get("black") or urls.get("white") or "")
+        if not model_url:
+            return
+        model_url = self._electron_model_url(model_url)
+        payload: dict[str, Any] = {
+            "model_url": model_url,
+            "electron_model_url": model_url,
+            "character_folder": canonical_key,
+            "character_folder_name": canonical_key,
+            "model_token": canonical_token,
+            "target_renderer_ids": [renderer_id],
+        }
+        self._emit({"type": "switch_live2d", "data": payload})
+
+    @staticmethod
+    def _electron_model_url(model_url: str) -> str:
+        """Translate a Pygame/local model path to the bridge HTTP endpoint."""
+        normalized = str(model_url or "").replace("\\", "/")
+        if normalized.startswith(("http://", "https://")):
+            return normalized
+        marker = "live2d_related"
+        if marker in normalized:
+            relative = normalized.split(marker, 1)[1].lstrip("/")
+            return f"http://127.0.0.1:9877/model/{relative}"
+        return normalized
+
+    def _renderer_model_token(self, renderer_id: str) -> str:
+        # The token is kept separately by ``handle_renderer_fact`` so this
+        # helper remains independent from capability catalog representation.
+        return self._renderer_tokens.get(renderer_id, "")
+
+    def _finish_pending_conversion_if_ready(self) -> None:
+        """Release a conversion barrier once every live renderer is settled."""
+        if self._pending_conversion is None or self._pending_conversion_renderers:
+            return
+        pending, self._pending_conversion = self._pending_conversion, None
+        self._pending_conversion_model_token = ""
+        switch = dict(self._pending_conversion_switch or {})
+        self._pending_conversion_switch = None
+        self._conversion_replay_switch = switch or None
+        self._conversion_replay_renderers = {
+            self._renderer_instance_key(current_id)
+            for current_id in self._renderer_ids
+        }
+        self._emit_conversion_motion(pending)
 
 
 class SharedRendererService:

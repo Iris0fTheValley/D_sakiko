@@ -79,6 +79,36 @@ class SharedBehaviorScheduler:
                 self._long_due = self._clock() + 2.5
         self._motion_over = motion_over
 
+    def stop_talking(self) -> None:
+        """Release a talking reservation after the runtime stops its motion.
+
+        ``stop_motion`` is a backend fact/command and therefore does not
+        produce the normal SDK finish callback.  Clear the scheduler-owned
+        reservation here so a stopped talking motion cannot block idle or
+        leave a stale long-audio timer armed.
+        """
+        self._motion_over = True
+        self._long_group = ""
+        self._long_enabled = False
+        self._long_due = None
+        self._long_repeats = 0
+        self._idle_recover_due = self._clock() + 2.5
+
+    def reset_after_cancel(self) -> None:
+        """Reset all scheduler lifecycle state after an owner cancellation."""
+        now = self._clock()
+        self._thinking = False
+        self._think_motion_over = True
+        self._thinking_due = None
+        self._motion_over = True
+        self._audio_busy = False
+        self._idle_recover_due = now + 2.5
+        self._timed_idle_due = now + 25.0
+        self._long_group = ""
+        self._long_enabled = False
+        self._long_due = None
+        self._long_repeats = 0
+
     def start_segment(self, group: str, audio_duration_seconds: float) -> None:
         self._thinking = False
         self._thinking_due = None
@@ -87,6 +117,10 @@ class SharedBehaviorScheduler:
         self._long_enabled = audio_duration_seconds >= 6.0
         self._long_due = None
         self._long_repeats = 0
+
+    def cancel(self) -> None:
+        """Public alias for the cancellation reset used by the host."""
+        self.reset_after_cancel()
 
     def motion_started(self, purpose: str) -> None:
         if purpose == "thinking":

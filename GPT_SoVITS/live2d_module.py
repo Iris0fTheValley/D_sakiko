@@ -4,6 +4,7 @@ import contextlib
 import time
 from live2d.utils.lipsync import WavHandler
 import glob, os, sys
+from uuid import uuid4
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
@@ -352,21 +353,27 @@ class Live2DModule:
             overlay.set_text(self.current_character.character_name, self.new_text or "...")
 
         renderer_model_token = ""
+        renderer_instance_id = f"pygame-{uuid4().hex}"
 
         def emit_renderer_ready() -> None:
             """Publish runtime capability facts for the shared owner."""
-            if renderer_fact_queue is None or not isinstance(model, Live2DModelAdapter):
+            if renderer_fact_queue is None:
                 return
+            motion_files = model.motion_files_by_group if isinstance(model, Live2DModelAdapter) else {}
+            expression_ids = list(model.expression_ids) if isinstance(model, Live2DModelAdapter) else []
             renderer_fact_queue.put({
                 "type": "renderer_ready",
                 "data": {
                     "renderer_id": "pygame-renderer",
+                    "renderer_instance_id": renderer_instance_id,
                     "renderer_role": "pygame",
                     "model_token": renderer_model_token,
                     "model_key": self.current_character.character_folder_name,
-                    "motion_files_by_group": model.motion_files_by_group,
-                    "expression_ids": list(model.expression_ids),
+                    "model_json": current_layout_model_path or self.PATH_JSON or "",
+                    "motion_files_by_group": motion_files,
+                    "expression_ids": expression_ids,
                     "model_urls": {
+                        "model_json": current_layout_model_path or self.PATH_JSON or "",
                         "white": "../live2d_related/sakiko/live2D_model/3.model.json",
                         "black": "../live2d_related/sakiko/live2D_model_costume/3.model.json",
                     },
@@ -380,7 +387,12 @@ class Live2DModule:
             if fact.get("type") == "motion_finished":
                 self.eye_open_pending = True
             if renderer_fact_queue is not None:
-                renderer_fact_queue.put(fact)
+                payload = dict(fact)
+                data = dict(payload.get("data") or {})
+                data.setdefault("renderer_id", "pygame-renderer")
+                data.setdefault("renderer_instance_id", renderer_instance_id)
+                payload["data"] = data
+                renderer_fact_queue.put(payload)
 
         def emit_renderer_trace(trace: dict) -> None:
             if renderer_trace_queue is not None:

@@ -42,11 +42,14 @@ onMounted(async () => {
   })
 
   try {
-    // The packaged Electron renderer is loaded from file://.  Keep the
-    // bootstrap model relative to dist/renderer so it works before Bridge
-    // sends Python's authoritative load_model command.
-    const modelSrc = props.modelPath || './live2d/sakiko/live2D_model/3.model.json'
-    const key = props.modelKey || 'sakiko'
+    // Model selection is authoritative Python state.  A cold Electron
+    // renderer stays an inert runtime until the owner sends switch_live2d.
+    if (!props.modelPath) {
+      console.log('[Live2DStage] Waiting for authoritative model command')
+      return
+    }
+    const modelSrc = props.modelPath
+    const key = props.modelKey || 'live2d'
     const live2dModel = await Live2DModel.from(modelSrc, { autoInteract: false })
 
     // Electron 默认窗口尺寸是 450x600。这个基准必须在换模时保持稳定；
@@ -94,7 +97,7 @@ onMounted(async () => {
     emit('renderer-fact', {
       type: 'command_failed',
       data: {
-        command_type: 'load_model',
+        command_type: 'switch_live2d',
         model_token: props.modelToken || '',
         renderer_id: props.rendererId || props.modelKey || 'electron-renderer',
         reason: String(e),

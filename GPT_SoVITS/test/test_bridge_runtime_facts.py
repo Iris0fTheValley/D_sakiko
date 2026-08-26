@@ -61,6 +61,20 @@ class BridgeRuntimeFactTest(unittest.TestCase):
         self.assertFalse(hasattr(bridge, "_motion_reader_thread"))
         self.assertFalse(hasattr(bridge, "_motion_reader"))
 
+    def test_renderer_disconnect_fact_is_emitted_for_hello_writer(self):
+        facts = Queue()
+        bridge = Bridge(Queue(), renderer_fact_queue=facts)
+        writer = object()
+        asyncio.run(bridge._on_renderer_message({
+            "type": "renderer_hello",
+            "data": {"renderer_id": "electron", "renderer_instance_id": "instance-1"},
+        }, writer))
+        self.assertEqual(facts.get_nowait()["type"], "renderer_hello")
+        asyncio.run(bridge._on_renderer_disconnect(writer))
+        disconnected = facts.get_nowait()
+        self.assertEqual(disconnected["type"], "renderer_disconnected")
+        self.assertEqual(disconnected["data"], {"renderer_id": "electron", "renderer_instance_id": "instance-1"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,6 +140,8 @@ function connectWebSocket() {
       model_key: currentCharKey.value,
       model_token: pendingModelToken.value,
       renderer_id: rendererId,
+      renderer_role: 'electron',
+      renderer_instance_id: rendererInstanceId,
     })))
     rendererController.value?.reportReady()
   }
@@ -152,15 +154,6 @@ function connectWebSocket() {
         const target = command?.data?.target_renderer_id
         if ((Array.isArray(targets) && targets.length > 0 && !targets.includes(rendererId))
           || (target && target !== rendererId)) return
-        if (command?.type === 'load_model' && command.data?.model?.model_url) {
-          pendingModelToken.value = String(command.data.token || '')
-          reloadCustomModel(
-            command.data.model.model_url,
-            command.data.model.character_folder,
-            command.data.model.theme_color,
-          )
-          return
-        }
         if (command?.type === 'set_theme_color') {
           setThemeColor(command.data?.theme_color)
           return
@@ -177,10 +170,6 @@ function connectWebSocket() {
           }
           rendererController.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: commandData })
         }
-        return
-      }
-      if (msg.type === 'model_switch' && msg.data?.model_url) {
-        reloadCustomModel(msg.data.model_url, msg.data.character_folder, msg.data.theme_color)
         return
       }
       if (msg.type === 'renderer_snapshot' && Array.isArray(msg.data?.commands)) {

@@ -39,12 +39,13 @@ class Bridge:
         self.audio_base = audio_base  # 音频文件根目录，用于 HTTP 静态服务
         self.renderer_fact_queue = renderer_fact_queue
         self.renderer_command_queue = renderer_command_queue
-        self.ws = WSServer(on_message=self._on_renderer_message)
+        self.ws = WSServer(on_message=self._on_renderer_message, on_disconnect=self._on_renderer_disconnect)
         self._reader_thread: Optional[threading.Thread] = None
         self._renderer_command_reader_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._snapshot_model_switch = None
         self._snapshot_thinking = None
+        self._renderer_ids_by_writer = {}
 
     async def _on_renderer_connect(self, writer):
         """Replay cached exact commands to one newly connected renderer."""
@@ -78,8 +79,25 @@ class Bridge:
         """Forward renderer facts verbatim; the shared state consumes them."""
         if self.renderer_fact_queue is not None and isinstance(message, dict):
             if message.get('type') == 'renderer_hello' and writer is not None:
+                data = message.get('data') or {}
+                renderer_id = str(data.get('renderer_id') or '')
+                if renderer_id:
+                    self._renderer_ids_by_writer[writer] = {
+                        'renderer_id': renderer_id,
+                        'renderer_instance_id': str(data.get('renderer_instance_id') or ''),
+                    }
                 await self._on_renderer_connect(writer)
             self.renderer_fact_queue.put(message)
+
+    async def _on_renderer_disconnect(self, writer):
+        identity = self._renderer_ids_by_writer.pop(writer, None)
+        if identity is None or self.renderer_fact_queue is None:
+            return
+        self.renderer_fact_queue.put({
+            'v': 2,
+            'type': 'renderer_disconnected',
+            'data': identity,
+        })
 
     def start(self):
         """启动 WebSocket 服务 + 事件 reader 线程"""
@@ -236,3 +254,11 @@ class Bridge:
             self.bridge_q.put(None)
         if self.renderer_command_queue is not None:
             self.renderer_command_queue.put(None)
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            async def close_transport():
+                try:
+                    await self.ws.stop()
+                finally:
+                    loop.stop()
+            asyncio.run_coroutine_threadsafe(close_transport(), loop)
