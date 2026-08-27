@@ -17,7 +17,7 @@ with open(os.devnull, "w") as devnull:
 from OpenGL.GL import *
 
 from live2d_module import BackgroundRen
-from live2d_support.layout import Live2DLayout, get_live2d_layout
+from live2d_support.layout import Live2DLayout, get_live2d_layout, save_live2d_layout, reset_live2d_layout
 from live2d_support.runtime_adapter import (
     Live2DModelAdapter,
     detect_live2d_runtime_version,
@@ -70,6 +70,11 @@ def run_theater_pygame_backend(
     audio_token = ""
     audio_was_busy = False
     lip_sync_slot: int | None = None
+    layout_editing = False
+    layout_dragging = False
+    layout_selected_slot = 0
+    layout_dirty_slots: set[int] = set()
+    layout_last_mouse_pos = None
 
     backgrounds = glob.glob(os.path.join("../live2d_related", "*.jpg")) + glob.glob(os.path.join("../live2d_related", "*.png"))
     if not backgrounds:
@@ -152,7 +157,12 @@ def run_theater_pygame_backend(
             except Exception:
                 logger.exception("无法识别小剧场模型：%s", path)
                 versions.append(None)
-        target_version = next((version for version in versions if version is not None), None)
+        available = [version for version in versions if version is not None]
+        changed_slot = data.get("changed_slot") if data.get("changed_slot") in (0, 1) else None
+        if len(set(available)) > 1:
+            target_version = versions[changed_slot] if changed_slot is not None and versions[changed_slot] else available[0]
+        else:
+            target_version = available[0] if available else None
         dispose_models()
         if target_version != runtime_version:
             release_live2d_runtime(runtime)
@@ -163,7 +173,10 @@ def run_theater_pygame_backend(
         slots = normalized
         for slot_index, slot in enumerate(slots):
             path = str(slot.get("model_json_path") or "")
-            if not path or versions[slot_index] != runtime_version:
+            visible = versions[slot_index] == runtime_version
+            if len(set(available)) > 1 and changed_slot is not None:
+                visible = slot_index == changed_slot
+            if not path or not visible:
                 continue
             try:
                 model = Live2DModelAdapter.create(path)
@@ -176,6 +189,10 @@ def run_theater_pygame_backend(
         wav_handler = WavHandler()
         names = [str(slot.get("character_name") or f"slot{index}") for index, slot in enumerate(slots)]
         overlay = TextOverlay((width, height), names)
+        if len(set(available)) > 1:
+            visible_name = names[changed_slot] if changed_slot is not None else names[0]
+            hidden_name = names[1 - changed_slot] if changed_slot is not None else names[1]
+            overlay.set_text("版本不一致", f"当前只显示 {visible_name}，{hidden_name} 已暂时隐藏。")
         emit_ready()
 
     def start_audio(path: str) -> bool:
@@ -194,6 +211,7 @@ def run_theater_pygame_backend(
 
     def execute(command: dict) -> None:
         nonlocal audio_token, audio_was_busy, lip_sync_slot, target_fps, texture, background_index, wav_handler
+        nonlocal layout_editing, layout_dragging, layout_selected_slot, layout_last_mouse_pos
         command_type = str(command.get("type") or "")
         data = command.get("data")
         data = dict(data) if isinstance(data, dict) else {}
@@ -217,6 +235,15 @@ def run_theater_pygame_backend(
             background_index = (background_index + 1) % len(backgrounds)
             glDeleteTextures([texture])
             texture = BackgroundRen.render(pygame.image.load(backgrounds[background_index]).convert_alpha())
+            return
+        if command_type == "toggle_l2d_layout_edit":
+            layout_editing = not layout_editing
+            layout_dragging = False
+            if not layout_editing:
+                for slot in tuple(layout_dirty_slots):
+                    if slots[slot].get("model_json_path"):
+                        save_live2d_layout(str(slots[slot]["model_json_path"]), "theater", layouts[slot])
+                layout_dirty_slots.clear()
             return
         if command_type not in {"play_motion", "play_audio"}:
             return
@@ -272,6 +299,36 @@ def run_theater_pygame_backend(
                 if event.type == pygame.QUIT:
                     emit({"type": "renderer_intent", "data": {"intent": "bye"}})
                     running = False
+                elif layout_editing and event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
+                    layout_editing = False
+                elif layout_editing and event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                    path = slots[layout_selected_slot].get("model_json_path")
+                    model = models[layout_selected_slot]
+                    if path and model is not None:
+                        reset_live2d_layout(str(path), "theater")
+                        layouts[layout_selected_slot] = get_live2d_layout(str(path), model.version, "theater")
+                        apply_layout(layout_selected_slot, model)
+                elif layout_editing and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    layout_selected_slot = 0 if event.pos[0] < width / 2 else 1
+                    layout_dragging = models[layout_selected_slot] is not None
+                    layout_last_mouse_pos = event.pos
+                elif layout_editing and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    layout_dragging = False
+                    layout_last_mouse_pos = None
+                elif layout_editing and event.type == pygame.MOUSEMOTION and layout_dragging and layout_last_mouse_pos:
+                    slot = layout_selected_slot
+                    last_x, last_y = layout_last_mouse_pos
+                    layouts[slot] = layouts[slot].moved_by_pixels(event.pos[0] - last_x, event.pos[1] - last_y, width, height)
+                    if models[slot] is not None:
+                        apply_layout(slot, models[slot])
+                    layout_dirty_slots.add(slot)
+                    layout_last_mouse_pos = event.pos
+                elif layout_editing and event.type in (pygame.MOUSEWHEEL,):
+                    slot = layout_selected_slot
+                    layouts[slot] = layouts[slot].zoomed(int(event.y))
+                    if models[slot] is not None:
+                        apply_layout(slot, models[slot])
+                    layout_dirty_slots.add(slot)
 
             glClear(GL_COLOR_BUFFER_BIT)
             glUseProgram(0)

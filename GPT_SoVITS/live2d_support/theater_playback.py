@@ -30,6 +30,7 @@ class TheaterPlaybackState:
         self._sequence = 0
         self._motion_facing_mode = "screen"
         self._idle_switch_slot: int | None = None
+        self._changed_slot: int | None = None
 
     @property
     def active(self) -> bool:
@@ -51,6 +52,8 @@ class TheaterPlaybackState:
         if not normalized:
             return None
         self._slots = normalized
+        changed_slot = data.get("changed_slot")
+        self._changed_slot = changed_slot if changed_slot in (0, 1) else None
         self._motion_facing_mode = str(data.get("motion_facing_mode") or "screen")
         if not bool(data.get("preserve_playback", False)):
             self._pending.clear()
@@ -156,6 +159,7 @@ class TheaterPlaybackState:
             "type": "switch_live2d",
             "theater_slots": deepcopy(self._slots),
             "initial_model": True,
+            "changed_slot": self._changed_slot,
         }
 
     def segment_data(self, turn: Mapping[str, Any]) -> dict[str, Any]:
