@@ -97,26 +97,12 @@ class SharedRendererHost:
     def all_renderers_unavailable(self) -> bool:
         return bool(self._unavailable_renderer_ids) and not self._renderer_ids
 
-    @property
-    def model_switch_pending(self) -> bool:
-        return (
-            self._pending_model_switch is not None
-            or self._pending_conversion is not None
-            or any(
-                purpose == "change_character" or purpose.startswith("sakiko_")
-                for purpose in self._scheduled_tokens.values()
-            )
-        )
-
     def reject_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str,
-                               audio_path: str, audio_duration_seconds: float = 0.0,
-                               position: str = "C", target_slot: int | None = None) -> bool:
+                               audio_path: str, audio_duration_seconds: float = 0.0) -> bool:
         """Resolve a terminal no-runtime fact without leaving owner state active."""
         segment = self._behavior.start_emotion_segment(
             turn_id=turn_id, segment_id=segment_id, emotion=emotion,
             audio_path=audio_path, audio_duration_seconds=audio_duration_seconds,
-            position=position,
-            target_slot=target_slot,
         )
         if segment is None:
             return False
@@ -217,13 +203,9 @@ class SharedRendererHost:
             return True
         return False
 
-    def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str,
-                              audio_path: str, audio_duration_seconds: float = 0.0,
-                              position: str = "C", target_slot: int | None = None) -> bool:
+    def start_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str, audio_path: str, audio_duration_seconds: float = 0.0) -> bool:
         segment = self._behavior.start_emotion_segment(
-            turn_id=turn_id, segment_id=segment_id, emotion=emotion, audio_path=audio_path,
-            audio_duration_seconds=audio_duration_seconds, position=position,
-            target_slot=target_slot,
+            turn_id=turn_id, segment_id=segment_id, emotion=emotion, audio_path=audio_path, audio_duration_seconds=audio_duration_seconds,
         )
         if segment is None:
             return False
@@ -390,9 +372,6 @@ class SharedRendererHost:
                 self._renderer_roles[renderer_id] = str(data.get("renderer_role") or "")
                 self._renderer_instances[renderer_id] = renderer_instance_id
             motion_files = data.get("motion_files_by_group")
-            slot_catalogs = data.get("slot_catalogs")
-            if isinstance(slot_catalogs, Mapping):
-                self._behavior.set_slot_catalogs(slot_catalogs)
             expression_ids = data.get("expression_ids", ())
             normalized_expression_ids = tuple(expression_ids) if isinstance(expression_ids, (list, tuple)) else ()
             if renderer_id:
@@ -605,8 +584,6 @@ class SharedRendererHost:
         return self._emit_scheduled(command, replay_for_late_renderers=True)
 
     def tick(self) -> bool:
-        if self.model_switch_pending:
-            return False
         if self._renderer_ids and not self._motion_renderer_ids():
             return False
         return self._emit_scheduled(self._scheduler.tick())
@@ -648,15 +625,8 @@ class SharedRendererHost:
         semantic = "serious" if model_key == "sakiko" and "costume" in model_path else "idle"
         scheduled = self._scheduler.request_motion("change_character", 3, "change_character")
         if scheduled is None:
-            if self._ready:
-                # The newly loaded catalog genuinely has no switch animation.
-                # The runtime barrier is complete, so do not stall later
-                # theater or chat segments waiting for an impossible motion.
-                self._pending_model_switch = None
-                self._pending_model_switch_renderers.clear()
-                return True
-            # No renderer catalog exists yet. Preserve the exact switch until
-            # the first runtime reports its capabilities.
+            # Keep the switch pending until a renderer reports its catalog;
+            # Electron-only startup must not lose the initial model decision.
             return False
         expression_id = self._scheduler.resolve_semantic_expression(semantic)
         if expression_id:
@@ -994,13 +964,11 @@ class SharedRendererService:
 
     def __init__(self, intent_queue, renderer_fact_queue, command_queue,
                  owner: AuthoritativeLive2DOwner, legacy_motion_complete_value=None,
-                 trace: CommandEmitter | None = None, theater_event_queue=None) -> None:
+                 trace: CommandEmitter | None = None) -> None:
         self._intents = intent_queue
         self._facts = renderer_fact_queue
         self._commands = command_queue
         self._trace = trace
-        self._owner = owner
-        self._theater_events = theater_event_queue
         self._host = SharedRendererHost(self._emit_command, owner, legacy_motion_complete_value)
         self._pending_intents = deque()
         self._bye_handled = Event()
@@ -1035,11 +1003,6 @@ class SharedRendererService:
             if isinstance(fact, Mapping):
                 self._record_trace("fact", fact)
             handled += int(isinstance(fact, Mapping) and self._host.handle_renderer_fact(fact))
-            if (
-                self._owner.theater.active_token
-                and self._owner.behavior.active_command is None
-            ):
-                self._owner.theater.complete(self._owner.theater.active_token)
         while True:
             try:
                 intent = self._intents.get_nowait()
@@ -1054,9 +1017,7 @@ class SharedRendererService:
             intent_type = intent.get("type")
             # Emotion segments require a renderer catalog; lifecycle/control
             # intents must still be consumed when model loading failed.
-            if intent_type == "emotion_segment" and (
-                not self._host.ready or self._host.model_switch_pending
-            ):
+            if intent_type == "emotion_segment" and not self._host.ready:
                 if self._host.all_renderers_unavailable:
                     self._pending_intents.popleft()
                     data = intent.get("data", {})
@@ -1067,8 +1028,6 @@ class SharedRendererService:
                             emotion=str(data.get("emotion", "")),
                             audio_path=str(data.get("audio_path", "")),
                             audio_duration_seconds=float(data.get("audio_duration_seconds", 0.0) or 0.0),
-                            position=str(data.get("position") or "C"),
-                            target_slot=data.get("target_slot") if data.get("target_slot") in (0, 1) else None,
                         ))
                     continue
                 control_index = next(
@@ -1084,15 +1043,17 @@ class SharedRendererService:
             else:
                 self._pending_intents.popleft()
             if intent_type != "emotion_segment":
-                data = intent.get("data", {})
                 if intent_type == "bye":
                     handled += int(self._host.start_bye())
                     self._bye_handled.set()
                 elif intent_type == "thinking_changed":
+                    data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.set_thinking(data.get("active") is True))
                 elif intent_type == "sakiko_conversion":
+                    data = intent.get("data", {})
                     handled += int(isinstance(data, Mapping) and self._host.start_sakiko_conversion(data.get("value"), data.get("model_urls", {})))
                 elif intent_type == "runtime_control":
+                    data = intent.get("data", {})
                     if isinstance(data, Mapping) and str(data.get("type") or "") == "cancel_turn":
                         # Match master cancellation semantics: queued
                         # segments belong to the cancelled turn and must not
@@ -1102,25 +1063,6 @@ class SharedRendererService:
                             if not (isinstance(candidate, Mapping) and candidate.get("type") == "emotion_segment")
                         )
                     handled += int(isinstance(data, Mapping) and self._host.handle_runtime_control(data))
-                elif intent_type == "theater_active_slots":
-                    if isinstance(data, Mapping):
-                        switch = self._owner.theater.set_active_slots(data)
-                        if switch is not None:
-                            handled += int(self._host.handle_runtime_control(switch))
-                elif intent_type == "theater_playlist":
-                    if isinstance(data, Mapping):
-                        self._owner.theater.enqueue_playlist(data)
-                        handled += 1
-                elif intent_type == "theater_stop":
-                    self._owner.theater.stop_after_current_turn()
-                    handled += 1
-                elif intent_type == "sakiko_toggle":
-                    black = not self._owner.sakiko_conversion.is_black
-                    self._owner.theater.update_sakiko_model(black=black)
-                    self._owner.sakiko_conversion.decide(black)
-                    switch = self._owner.theater.next_model_switch()
-                    if switch is not None:
-                        handled += int(self._host.handle_runtime_control(switch))
                 continue
             data = intent.get("data", {})
             if not isinstance(data, Mapping):
@@ -1129,46 +1071,9 @@ class SharedRendererService:
                 turn_id=str(data.get("turn_id", "")), segment_id=str(data.get("segment_id", "")),
                 emotion=str(data.get("emotion", "")), audio_path=str(data.get("audio_path", "")),
                 audio_duration_seconds=float(data.get("audio_duration_seconds", 0.0) or 0.0),
-                position=str(data.get("position") or "C"),
-                target_slot=data.get("target_slot") if data.get("target_slot") in (0, 1) else None,
             ))
-        handled += self._advance_theater()
         handled += int(self._host.tick())
         return handled
-
-    def _advance_theater(self) -> int:
-        theater = self._owner.theater
-        if theater.awaiting_model:
-            if not self._host.ready or self._host.model_switch_pending:
-                return 0
-            theater.accept_model_ready()
-        switch = theater.next_model_switch()
-        if switch is not None:
-            return int(self._host.handle_runtime_control(switch))
-        if theater.awaiting_model:
-            return 0
-        turn = theater.ready_turn()
-        if turn is None or not self._host.ready:
-            return 0
-        if self._theater_events is not None:
-            self._theater_events.put(deepcopy(turn))
-        data = theater.segment_data(turn)
-        started = self._host.start_emotion_segment(
-            turn_id=data["turn_id"],
-            segment_id=data["segment_id"],
-            emotion=data["emotion"],
-            audio_path=data["audio_path"],
-            audio_duration_seconds=data["audio_duration_seconds"],
-            position=data["position"],
-            target_slot=data["target_slot"],
-        )
-        active = self._owner.behavior.active_command
-        if started and active is not None:
-            theater.mark_dispatched(active.command_id)
-        else:
-            theater.mark_dispatched("")
-            theater.complete()
-        return int(started) + 1
 
     def wait_for_bye(self, timeout_seconds: float = 2.0) -> bool:
         """Wait until the queued bye intent has become an exact runtime command."""

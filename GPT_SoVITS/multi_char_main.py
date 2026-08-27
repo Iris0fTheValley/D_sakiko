@@ -1668,7 +1668,7 @@ class ViewerGUI(QWidget):
             model_path: str | None = override_paths.get(slot)
             if slot not in override_paths and self.current_chat is not None:
                 model_path = self.current_chat.get_custom_live2d_model_meta(char_name)
-            if slot not in override_paths and not model_path:
+            if slot not in override_paths and self.current_chat is None:
                 model_path = self._default_model_path_from_index(char_index)
 
             slots.append({
@@ -2543,7 +2543,7 @@ if __name__ == "__main__":
     import multiprocessing as mp
     from dp_local_multi_char import DSLocalAndVoiceGen
     from audio_generator import AudioGenerate
-    from live2d_support.theater_runtime import create_theater_runtime
+    from multi_char_live2d_module import run_live2d_process
 
     # Windows/macOS 下默认是 spawn；显式声明有助于一致性
     mp.freeze_support()
@@ -2569,6 +2569,14 @@ if __name__ == "__main__":
     tell_qt_this_turn_finish_queue = ctx.Queue()
 
     audio_gen.initialize(get_char_attr.character_class_list, message_queue)
+
+    # Live2D：必须在子进程的主线程里创建窗口（macOS NSWindow 限制）
+    live2d_process = ctx.Process(
+        target=run_live2d_process,
+        args=(change_char_queue, to_live2d_module_queue, tell_qt_this_turn_finish_queue, 
+              get_log_queue()),
+        name="Live2DProcess",
+    )
 
     dp_thread = threading.Thread(
         target=dp_module.text_generator,
@@ -2602,16 +2610,7 @@ if __name__ == "__main__":
     window.move(screen_w_mid,
                 int(screen_h_mid - 0.35 * QDesktopWidget().screenGeometry().height()))  # 因为窗口高度设置的是0.7倍桌面宽
 
-    theater_runtime = create_theater_runtime(
-        context=ctx,
-        control_queue=change_char_queue,
-        playlist_queue=to_live2d_module_queue,
-        turn_event_queue=tell_qt_this_turn_finish_queue,
-        desktop_width=QDesktopWidget().screenGeometry().width(),
-        desktop_height=QDesktopWidget().screenGeometry().height(),
-        log_queue=get_log_queue(),
-    )
-    theater_runtime.start()
+    live2d_process.start()
     dp_thread.start()
     window.show()
     app.exec_()
@@ -2635,7 +2634,17 @@ if __name__ == "__main__":
         audio_gen.shutdown_worker()
     except Exception:
         pass
-    theater_runtime.shutdown()
+    # 给子进程一点时间自我退出；否则强制 terminate 避免僵尸进程
+    try:
+        live2d_process.join(timeout=3)
+    except Exception:
+        pass
+    if live2d_process.is_alive():
+        try:
+            live2d_process.terminate()
+            live2d_process.join(timeout=3)
+        except Exception:
+            pass
     
     shutdown_logging()
 

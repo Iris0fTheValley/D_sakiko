@@ -26,7 +26,6 @@ def motion_command(segment: PlaySegment) -> dict[str, Any] | None:
             "index": motion.index,
             "priority": motion.priority,
             "position": motion.position,
-            "target_slot": segment.target_slot,
             "expression_id": motion.expression_id,
         },
     }
