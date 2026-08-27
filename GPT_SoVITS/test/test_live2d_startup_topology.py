@@ -79,6 +79,27 @@ class Live2DStartupTopologyTest(unittest.TestCase):
         self.assertIn("LegacyControlIntentFanout(", source)
         self.assertIn("control_intent_fanout.run", source)
 
+    def test_small_theater_entry_uses_one_shared_owner_and_current_backend(self):
+        source = (ROOT / "multi_char_main.py").read_text(encoding="utf-8")
+        runtime = (ROOT / "live2d_support" / "theater_runtime.py").read_text(encoding="utf-8")
+        self.assertIn("create_theater_runtime", source)
+        self.assertNotIn("from multi_char_live2d_module import run_live2d_process", source)
+        self.assertEqual(runtime.count("AuthoritativeLive2DOwner()"), 1)
+        self.assertEqual(runtime.count("SharedRendererService("), 1)
+        self.assertIn("target=_run_theater_pygame_backend", runtime)
+        backend = (ROOT / "live2d_support" / "theater_pygame_backend.py").read_text(encoding="utf-8")
+        self.assertIn("models: list[Live2DModelAdapter | None] = [None, None]", backend)
+        self.assertIn("target_slot", backend)
+        self.assertIn("slot_catalogs", backend)
+
+    def test_renderer_selector_is_typed_and_visible(self):
+        config_source = (ROOT / "qconfig.py").read_text(encoding="utf-8")
+        settings_source = (ROOT / "ui" / "components" / "custom_setting_area.py").read_text(encoding="utf-8")
+        self.assertIn('"live2d_renderer",\n        "electron"', config_source)
+        self.assertIn('OptionsValidator(["electron", "pygame"])', config_source)
+        self.assertIn("d_sakiko_config.live2d_renderer", settings_source)
+        self.assertIn('texts=[self.tr("Electron"), self.tr("Pygame")]', settings_source)
+
 
 if __name__ == "__main__":
     unittest.main()

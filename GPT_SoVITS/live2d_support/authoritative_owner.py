@@ -6,6 +6,7 @@ import time
 from live2d_support.behavior_scheduler import SharedBehaviorScheduler
 from live2d_support.sakiko_conversion import SharedSakikoConversion
 from live2d_support.shared_behavior import SharedLive2DBehavior
+from live2d_support.theater_playback import TheaterPlaybackState
 
 
 class AuthoritativeLive2DOwner:
@@ -16,3 +17,4 @@ class AuthoritativeLive2DOwner:
         self.behavior = SharedLive2DBehavior(rng=rng)
         self.scheduler = SharedBehaviorScheduler(clock=clock, rng=rng)
         self.sakiko_conversion = SharedSakikoConversion(rng=rng)
+        self.theater = TheaterPlaybackState(clock=clock)

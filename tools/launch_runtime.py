@@ -21,10 +21,10 @@ def renderer_mode() -> str:
         return override
     try:
         with CONFIG_PATH.open("r", encoding="utf-8") as stream:
-            configured = str(json.load(stream).get("ui_state", {}).get("live2d_renderer", "pygame")).lower()
-            return configured if configured in {"pygame", "electron"} else "pygame"
+            configured = str(json.load(stream).get("ui_state", {}).get("live2d_renderer", "electron")).lower()
+            return configured if configured in {"pygame", "electron"} else "electron"
     except (OSError, json.JSONDecodeError, AttributeError):
-        return "pygame"
+        return "electron"
 
 
 def dual_renderer_enabled() -> bool:

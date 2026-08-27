@@ -42,7 +42,10 @@ class PygameRendererCommandAdapter:
         if isinstance(expression, str) and expression: self._runtime.set_expression_if_supported(expression)
         def started(*_): self._emit_fact({"type":"motion_started","data":{"token":token}})
         def finished(*_): self._emit_fact({"type":"motion_finished","data":{"token":token}})
-        ok = self._runtime.StartMotion(group, index, int(data.get("priority", 3)), started, finished, position=None, auto_expression=False)
+        position = data.get("position")
+        if position not in {"L", "R", "C"}:
+            position = None
+        ok = self._runtime.StartMotion(group, index, int(data.get("priority", 3)), started, finished, position=position, auto_expression=False)
         if not ok: self._emit_fact({"type":"command_failed","data":{"token":token,"phase":"motion_start"}})
         return ok
 

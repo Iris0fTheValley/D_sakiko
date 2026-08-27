@@ -4,6 +4,8 @@ from __future__ import annotations
 from queue import Empty
 import time
 
+from live2d_support.audio_duration import read_audio_duration_seconds
+
 
 class ThinkingStateQueue:
     """Compatibility queue that mirrors producer/consumer edges to the owner."""
@@ -105,6 +107,63 @@ class LegacyControlIntentFanout:
             except Empty:
                 break
             self._intents.put({"type": "sakiko_conversion", "data": {"value": conversion}})
+            handled += 1
+        return handled
+
+    def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
+        while not stop_event.is_set():
+            if self.run_once() == 0:
+                time.sleep(poll_interval_seconds)
+
+
+class TheaterIngressAdapter:
+    """Translate historical theater queues into owner intents without policy."""
+
+    def __init__(self, control_queue, playlist_queue, owner_intents) -> None:
+        self._controls = control_queue
+        self._playlists = playlist_queue
+        self._intents = owner_intents
+
+    def run_once(self) -> int:
+        handled = 0
+        while True:
+            try:
+                control = self._controls.get_nowait()
+            except Empty:
+                break
+            if isinstance(control, str) and control.upper() == "EXIT":
+                self._intents.put({"type": "bye", "data": {}})
+            elif isinstance(control, dict):
+                command_type = str(control.get("type") or "")
+                if command_type == "set_active_slots":
+                    self._intents.put({"type": "theater_active_slots", "data": dict(control)})
+                elif command_type == "toggle_sakiko_model":
+                    self._intents.put({"type": "sakiko_toggle", "data": {}})
+                else:
+                    self._intents.put({"type": "runtime_control", "data": dict(control)})
+            handled += 1
+        while True:
+            try:
+                payload = self._playlists.get_nowait()
+            except Empty:
+                break
+            if isinstance(payload, str):
+                intent_type = "bye" if payload.upper() == "EXIT" else "theater_stop"
+                self._intents.put({"type": intent_type, "data": {}})
+            elif isinstance(payload, dict):
+                normalized = dict(payload)
+                playlist = normalized.get("playlist")
+                if isinstance(playlist, list):
+                    turns = []
+                    for raw_turn in playlist:
+                        if not isinstance(raw_turn, dict):
+                            continue
+                        turn = dict(raw_turn)
+                        audio_path = str(turn.get("audio_path") or "")
+                        turn["audio_duration_seconds"] = read_audio_duration_seconds(audio_path)
+                        turns.append(turn)
+                    normalized["playlist"] = turns
+                self._intents.put({"type": "theater_playlist", "data": normalized})
             handled += 1
         return handled
 
