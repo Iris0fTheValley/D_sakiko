@@ -10,6 +10,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from live2d_support.shared_behavior import SharedLive2DBehavior
+from live2d_support.behavior_scheduler import SharedBehaviorScheduler
 
 
 class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
@@ -100,6 +101,17 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
         )
         assert counts_only is not None and counts_only.motion is not None
         self.assertIsNone(counts_only.motion.expression_id)
+
+    def test_scheduler_counts_only_catalog_clears_previous_expression_facts(self) -> None:
+        scheduler = SharedBehaviorScheduler(clock=lambda: 0.0, rng=Random(1))
+        scheduler.set_model_catalog({"idle_motion": ("idle_smile.mtn",)}, ("exp_idle01",))
+        detailed = scheduler.request_motion("idle_motion", 1, "idle")
+        assert detailed is not None
+        self.assertEqual(detailed.expression_id, "exp_idle01")
+        scheduler.set_catalog({"idle_motion": 1})
+        counts_only = scheduler.request_motion("idle_motion", 1, "idle")
+        assert counts_only is not None
+        self.assertIsNone(counts_only.expression_id)
 
     def test_failure_and_stale_facts_cannot_leave_segment_busy(self) -> None:
         command = self.behavior.start_emotion_segment(
