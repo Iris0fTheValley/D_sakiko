@@ -599,6 +599,7 @@ if __name__=='__main__':
     )
     electron_bridge_queue=Queue()
     electron_renderer_command_queue=Queue()
+    electron_ui_command_queue=Queue()
     electron_bridge=Bridge(
         electron_bridge_queue,
         audio_base=project_root,
@@ -612,6 +613,7 @@ if __name__=='__main__':
         owner_intent_queue, renderer_fact_queue,
         renderer_command_fanout, authoritative_owner, motion_complete_value,
         trace=build_live2d_trace_sink(),
+        ui_intent_queue=electron_ui_command_queue,
     )
     initial_live2d_intent = build_initial_live2d_intent(characters)
     if initial_live2d_intent is not None:
@@ -725,7 +727,8 @@ if __name__=='__main__':
                           audio_gen=audio_gen, live2d_text_queue=live2d_text_queue,
                           is_display_text_value=is_display_text_value, motion_complete_value=motion_complete_value,
                           emotion_queue=emotion_queue, audio_file_path_queue=audio_file_path_queue,
-                          change_char_queue=change_char_queue)
+                          change_char_queue=change_char_queue,
+                          electron_ui_command_queue=electron_ui_command_queue)
 
     font_id = QFontDatabase.addApplicationFont(os.path.abspath(font_path))  # 设置字体
     # font_id = -1 表示 Qt 无法加载给定的字体。此时，不设置程序的字体。

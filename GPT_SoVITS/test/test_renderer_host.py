@@ -70,6 +70,23 @@ class RendererHostTest(unittest.TestCase):
         facts.put({"type":"motion_started","data":{"token":motion["data"]["token"]}})
         self.assertEqual(service.run_once(), 1); self.assertEqual(commands.get_nowait()["type"], "play_audio")
 
+    def test_service_forwards_electron_ui_intents_without_owner_decision(self):
+        intents, facts, commands, ui_commands = Queue(), Queue(), Queue(), Queue()
+        owner = AuthoritativeLive2DOwner()
+        service = SharedRendererService(
+            intents, facts, commands, owner, ui_intent_queue=ui_commands,
+        )
+        for intent in ("open_python_settings", "start_voice_input", "stop_voice_input"):
+            facts.put({"type": "renderer_intent", "data": {"intent": intent}})
+
+        self.assertEqual(service.run_once(), 3)
+        self.assertEqual(
+            [ui_commands.get_nowait()["type"] for _ in range(3)],
+            ["open_python_settings", "start_voice_input", "stop_voice_input"],
+        )
+        self.assertIsNone(owner.behavior.active_command)
+        self.assertTrue(commands.empty())
+
     def test_service_trace_records_exact_command_and_raw_runtime_facts(self):
         intents, facts, commands, trace = Queue(), Queue(), Queue(), []
         service = SharedRendererService(

@@ -962,13 +962,23 @@ class SharedRendererHost:
 class SharedRendererService:
     """Queue adapter for bridge deployments; its policy remains in the host."""
 
+    _UI_INTENTS = frozenset({
+        "open_python_settings",
+        "start_voice_input",
+        "stop_voice_input",
+    })
+
     def __init__(self, intent_queue, renderer_fact_queue, command_queue,
                  owner: AuthoritativeLive2DOwner, legacy_motion_complete_value=None,
-                 trace: CommandEmitter | None = None) -> None:
+                 trace: CommandEmitter | None = None,
+                 ui_intent_queue=None) -> None:
         self._intents = intent_queue
         self._facts = renderer_fact_queue
         self._commands = command_queue
         self._trace = trace
+        # Electron controls that belong to the mature Qt UI are forwarded as
+        # UI requests. They are deliberately kept outside the Live2D owner.
+        self._ui_intent_queue = ui_intent_queue
         self._host = SharedRendererHost(self._emit_command, owner, legacy_motion_complete_value)
         self._pending_intents = deque()
         self._bye_handled = Event()
@@ -1002,6 +1012,15 @@ class SharedRendererService:
                 break
             if isinstance(fact, Mapping):
                 self._record_trace("fact", fact)
+                data = fact.get("data", {})
+                ui_intent = data.get("intent") if isinstance(data, Mapping) else None
+                if (fact.get("type") == "renderer_intent"
+                        and isinstance(ui_intent, str)
+                        and ui_intent in self._UI_INTENTS):
+                    if self._ui_intent_queue is not None:
+                        self._ui_intent_queue.put({"type": ui_intent})
+                    handled += 1
+                    continue
             handled += int(isinstance(fact, Mapping) and self._host.handle_renderer_fact(fact))
         while True:
             try:
