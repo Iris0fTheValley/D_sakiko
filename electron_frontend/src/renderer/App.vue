@@ -168,7 +168,7 @@ function connectWebSocket() {
           }
           if (command.type === 'switch_live2d' && commandData.model_url) {
             pendingModelToken.value = String(commandData.model_token || '')
-            reloadCustomModel(String(commandData.model_url), String(commandData.character_folder || currentCharKey.value))
+            reloadCustomModel(String(commandData.model_url), String(commandData.character_folder ?? commandData.character_folder_name ?? currentCharKey.value))
             return
           }
           rendererController.value?.pushCommand({ type: command.type, event_id: msg.event_id, session_id: msg.session_id, data: commandData })
@@ -186,7 +186,7 @@ function connectWebSocket() {
           }
           if (command.type === 'switch_live2d' && commandData.model_url) {
             pendingModelToken.value = String(commandData.model_token || '')
-            reloadCustomModel(String(commandData.model_url), String(commandData.character_folder || currentCharKey.value))
+            reloadCustomModel(String(commandData.model_url), String(commandData.character_folder ?? commandData.character_folder_name ?? currentCharKey.value))
             continue
           }
           if (hasModelSwitch || !rendererController.value) {

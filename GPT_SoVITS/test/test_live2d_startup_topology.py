@@ -61,6 +61,10 @@ class Live2DStartupTopologyTest(unittest.TestCase):
         self.assertNotIn("live2d_this_turn_motion_complete", source)
         self.assertIn('"type": "renderer_hello"', source)
 
+    def test_electron_uses_authoritative_character_folder_name_for_switches(self):
+        source = (ROOT.parent / "electron_frontend" / "src" / "renderer" / "App.vue").read_text(encoding="utf-8")
+        self.assertIn("commandData.character_folder ?? commandData.character_folder_name ?? currentCharKey.value", source)
+
     def test_control_and_thinking_inputs_enter_owner_ingress(self):
         source = (ROOT / "main2.py").read_text(encoding="utf-8")
         self.assertIn("ThinkingStateQueue(multiprocessing.Queue(), owner_intent_queue, thinking_item_count)", source)

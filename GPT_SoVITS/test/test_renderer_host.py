@@ -928,6 +928,52 @@ class RendererHostTest(unittest.TestCase):
             "http://127.0.0.1:9877/model/sakiko/live2D_model_costume/3.model.json",
         )
 
+    def test_normal_switch_discards_completed_sakiko_conversion_replay(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_token": "old",
+            "model_urls": {"black": "black.model.json", "white": "white.model.json"},
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+        conversion_token = self.out[-1]["data"]["model_token"]
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_token": conversion_token,
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertIsNotNone(host._conversion_replay_switch)
+        self.out.clear()
+        self.assertTrue(host.handle_runtime_control({
+            "type": "switch_live2d", "character_folder_name": "anon",
+            "character_name": "初华", "model_json": "anon.model.json",
+        }))
+        ordinary_token = self.out[-1]["data"]["model_token"]
+        self.assertIsNone(host._conversion_replay_switch)
+        self.assertIsNone(host._conversion_replay_motion)
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_token": ordinary_token,
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertFalse(any(message["type"] == "switch_live2d" for message in self.out[1:]))
+
+    def test_new_sakiko_conversion_supersedes_pending_normal_switch(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_token": "old",
+            "model_urls": {"black": "black.model.json", "white": "white.model.json"},
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.handle_runtime_control({
+            "type": "switch_live2d", "character_folder_name": "anon",
+            "character_name": "初华", "model_json": "anon.model.json",
+        }))
+        self.assertIsNotNone(host._pending_model_switch)
+        self.assertTrue(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+        self.assertIsNone(host._pending_model_switch)
+        self.assertIsNotNone(host._pending_conversion)
+        self.assertEqual(self.out[-1]["type"], "switch_live2d")
+        self.assertEqual(self.out[-1]["data"]["character_folder_name"], "sakiko")
+
     def test_late_pygame_replays_authoritative_local_model_then_joins_motion_fanout(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
         local_model = r"J:\models\anon\3.model.json"

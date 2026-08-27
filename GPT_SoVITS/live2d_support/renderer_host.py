@@ -173,6 +173,17 @@ class SharedRendererHost:
             payload = dict(data)
             payload.pop("type", None)
             payload.setdefault("model_token", uuid4().hex)
+            # A normal Qt model switch is a newer authoritative decision than
+            # any completed Sakiko conversion barrier.  Retire conversion
+            # delivery/replay state without touching persistent Sakiko
+            # black/white and mask state.
+            self._pending_conversion = None
+            self._pending_conversion_model_token = ""
+            self._pending_conversion_renderers.clear()
+            self._pending_conversion_switch = None
+            self._conversion_replay_switch = None
+            self._conversion_replay_motion = None
+            self._conversion_replay_renderers.clear()
             model_key = str(
                 payload.get("character_folder_name")
                 or payload.get("character_folder")
@@ -536,6 +547,10 @@ class SharedRendererHost:
 
     def start_sakiko_conversion(self, conversion, model_urls: Mapping[str, str]) -> bool:
         """Decide once; the renderer only reloads the requested model."""
+        # A newer Sakiko conversion supersedes a normal model switch that has
+        # not crossed its renderer barrier yet.
+        self._pending_model_switch = None
+        self._pending_model_switch_renderers.clear()
         decision = self._sakiko_conversion.decide(conversion)
         if decision.model_target == "current":
             return self._emit_conversion_motion(decision)
