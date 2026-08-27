@@ -148,9 +148,23 @@ class SharedBehaviorScheduler:
                 self._thinking_due = now + 15.0
             return
         self._motion_over = True
-        self._idle_recover_due = now + 2.5
+        if purpose == "idle_recover":
+            # Upstream's idle recovery has no finish callback and must not
+            # starve the independent 25-second IDLE check.
+            self._idle_recover_due = float("inf")
+        else:
+            self._idle_recover_due = now + 2.5
         if purpose in {"emotion", "long_audio_repeat"} and self._long_enabled and self._audio_busy:
             self._long_due = now + 2.5
+
+    def motion_rejected(self, purpose: str) -> None:
+        """Record a failed launch without arming long-audio repeats."""
+        if purpose == "emotion":
+            self._motion_over = True
+            self._long_group = ""
+            self._long_enabled = False
+            self._long_due = None
+            self._long_repeats = 0
 
     def click(self, *, is_sakiko: bool) -> ScheduledMotion | None:
         self._think_motion_over = True
@@ -171,7 +185,9 @@ class SharedBehaviorScheduler:
                 self._thinking_due = now + 15.0
                 return command
         if self._motion_over and not self._audio_busy and not self._thinking and now >= self._idle_recover_due:
-            return self._exact("idle_motion", 1, "idle_recover")
+            command = self._exact("idle_motion", 1, "idle_recover")
+            if command is not None:
+                return command
         if not self._audio_busy and not self._thinking and now >= self._timed_idle_due:
             self._timed_idle_due = now + 25.0
             return self._exact("IDLE", 1, "timed_idle")

@@ -9,7 +9,7 @@ root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if root not in sys.path:
     sys.path.insert(0, root)
 
-from live2d_support.legacy_intent_fanout import LegacyEmotionAudioFanout
+from live2d_support.legacy_intent_fanout import LegacyEmotionAudioFanout, OrderedLegacyOwnerIngress
 
 
 class LegacyEmotionAudioFanoutTest(unittest.TestCase):
@@ -50,6 +50,43 @@ class LegacyEmotionAudioFanoutTest(unittest.TestCase):
         self.assertTrue(self.pygame_emotion.empty())
         self.assertTrue(self.pygame_audio.empty())
         self.assertEqual(self.intents.get_nowait()["type"], "emotion_segment")
+
+    def test_ordered_ingress_processes_control_before_emotion(self):
+        controls, conversions = Queue(), Queue()
+        controls.put({"type": "cancel_turn"})
+        self.source_audio.put("voice.wav")
+        self.source_emotion.put("LABEL_0")
+        from live2d_support.runtime_ingress import LegacyControlIntentFanout
+        ordered = OrderedLegacyOwnerIngress(
+            LegacyEmotionAudioFanout(self.source_emotion, self.source_audio,
+                                     self.pygame_emotion, self.pygame_audio, self.intents),
+            LegacyControlIntentFanout(controls, conversions, self.intents),
+        )
+        self.assertEqual(ordered.run_once(), 2)
+        self.assertEqual(self.intents.get_nowait()["data"]["type"], "cancel_turn")
+        self.assertEqual(self.intents.get_nowait()["type"], "emotion_segment")
+
+    def test_ordered_ingress_preserves_upstream_control_conversion_thinking_emotion_order(self):
+        controls, conversions, thinking = Queue(), Queue(), Queue()
+        controls.put({"type": "cancel_turn"})
+        conversions.put("maskoff")
+        thinking.put({"type": "thinking_changed", "data": {"active": False}})
+        self.source_audio.put("voice.wav")
+        self.source_emotion.put("LABEL_0")
+        from live2d_support.runtime_ingress import LegacyControlIntentFanout
+        ordered = OrderedLegacyOwnerIngress(
+            LegacyEmotionAudioFanout(self.source_emotion, self.source_audio,
+                                     self.pygame_emotion, self.pygame_audio, self.intents),
+            LegacyControlIntentFanout(controls, conversions, self.intents),
+            thinking,
+        )
+        self.assertEqual(ordered.run_once(), 4)
+        events = [self.intents.get_nowait(), self.intents.get_nowait(),
+                  self.intents.get_nowait(), self.intents.get_nowait()]
+        self.assertEqual(
+            [event["type"] for event in events],
+            ["runtime_control", "sakiko_conversion", "thinking_changed", "emotion_segment"],
+        )
 
 
 if __name__ == "__main__":

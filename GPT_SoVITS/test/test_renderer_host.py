@@ -267,6 +267,68 @@ class RendererHostTest(unittest.TestCase):
         stop.set(); worker.join(0.5)
         self.assertFalse(worker.is_alive())
         self.assertEqual(commands.get_nowait()["type"], "close_renderer")
+
+    def test_service_processes_only_one_emotion_per_owner_cycle(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner(rng=Random(0)))
+        facts.put({"type": "renderer_ready", "data": {"motion_groups": {"happiness": 1}}})
+        for segment in ("one", "two"):
+            intents.put({"type": "emotion_segment", "data": {
+                "turn_id": "turn", "segment_id": segment, "emotion": "LABEL_0", "audio_path": f"{segment}.wav",
+            }})
+        service.run_once()
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
+        self.assertTrue(service._pending_intents)
+        service.run_once()
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
+
+    def test_service_prioritizes_control_before_emotion_when_queue_arrives_reordered(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner(rng=Random(0)))
+        facts.put({"type": "renderer_ready", "data": {"motion_groups": {"happiness": 1}}})
+        intents.put({"type": "emotion_segment", "data": {"emotion": "LABEL_0", "audio_path": "old.wav"}})
+        intents.put({"type": "runtime_control", "data": {"type": "cancel_turn"}})
+        service.run_once()
+        self.assertFalse(any(command.get("type") == "play_motion" for command in list(commands.queue)))
+
+    def test_cancel_drops_emotion_backlog_already_in_owner_queue(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner(rng=Random(0)))
+        intents.put({"type": "emotion_segment", "data": {"emotion": "LABEL_0", "audio_path": "old.wav"}})
+        intents.put({"type": "runtime_control", "data": {"type": "cancel_turn"}})
+        service.run_once()
+        self.assertFalse(any(command.get("type") == "play_motion" for command in list(commands.queue)))
+
+    def test_no_model_ready_fact_preserves_audio_fallback(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "anon",
+            "motion_files_by_group": {}, "capabilities": {"motion": False, "audio": True},
+        }})
+        self.assertTrue(host.ready)
+        self.assertTrue(host.start_emotion_segment(turn_id="t", segment_id="s", emotion="LABEL_0", audio_path="a.wav"))
+        self.assertEqual(self.out[-1]["type"], "play_audio")
+
+    def test_sakiko_conversion_requires_sakiko_v2_runtime(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "anon",
+            "runtime_version": "v2", "motion_groups": {"change_character": 1},
+        }})
+        self.assertFalse(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v3", "motion_groups": {"change_character": 1},
+        }})
+        self.assertFalse(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+
+    def test_sakiko_conversion_gate_applies_to_audio_only_runtime(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "anon",
+            "motion_files_by_group": {}, "capabilities": {"motion": False, "audio": True},
+        }})
+        self.assertFalse(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
     def test_bye_closes_only_after_matching_motion_finished(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_groups":{"bye":1}}})
         self.assertTrue(self.host.start_bye()); token=self.out[-1]["data"]["token"]

@@ -27,7 +27,7 @@ import live2d_module
 import qtUI
 from chat.chat import get_chat_manager
 from live2d_support.authoritative_owner import AuthoritativeLive2DOwner
-from live2d_support.legacy_intent_fanout import LegacyEmotionAudioFanout
+from live2d_support.legacy_intent_fanout import LegacyEmotionAudioFanout, OrderedLegacyOwnerIngress
 from live2d_support.renderer_host import SharedRendererService
 from live2d_support.runtime_ingress import ThinkingStateQueue, LegacyControlIntentFanout, FanoutQueue
 from bridge.saki_bridge import Bridge
@@ -620,7 +620,11 @@ if __name__=='__main__':
         owner_intent_queue.put(initial_live2d_intent)
     is_audio_play_complete=Queue()
     thinking_item_count=multiprocessing.Value('i', 0)
-    is_text_generating_queue=ThinkingStateQueue(multiprocessing.Queue(), owner_intent_queue, thinking_item_count)
+    thinking_intent_queue=multiprocessing.Queue()
+    is_text_generating_queue=ThinkingStateQueue(
+        multiprocessing.Queue(), owner_intent_queue, thinking_item_count,
+        ingress_queue=thinking_intent_queue,
+    )
     dp2qt_queue=Queue()
     qt2dp_queue=Queue()
     QT_message_queue=Queue()
@@ -628,6 +632,9 @@ if __name__=='__main__':
     change_char_queue=multiprocessing.Queue()
     control_intent_fanout=LegacyControlIntentFanout(
         change_char_queue, char_is_converted_queue, owner_intent_queue, pygame_runtime_control_queue,
+    )
+    ordered_owner_ingress = OrderedLegacyOwnerIngress(
+        legacy_intent_fanout, control_intent_fanout, thinking_intent_queue,
     )
     # Live2D 跨进程通信
     live2d_text_queue=multiprocessing.Queue()  # 用于传递要显示的文本
@@ -712,8 +719,7 @@ if __name__=='__main__':
     if tr1 is not None:
         tr1.start()
     electron_bridge.start()
-    threading.Thread(target=legacy_intent_fanout.run, args=(owner_stop_event,), daemon=True).start()
-    threading.Thread(target=control_intent_fanout.run, args=(owner_stop_event,), daemon=True).start()
+    threading.Thread(target=ordered_owner_ingress.run, args=(owner_stop_event,), daemon=True).start()
     threading.Thread(target=shared_renderer_service.run, args=(owner_stop_event,), daemon=True).start()
     tr2.start()
     tr3.start()

@@ -60,6 +60,17 @@ class Live2DStartupTopologyTest(unittest.TestCase):
         self.assertNotIn("motion_complete_value.value =", source)
         self.assertNotIn("live2d_this_turn_motion_complete", source)
         self.assertIn('"type": "renderer_hello"', source)
+        self.assertIn('"runtime_version": runtime_version', source)
+        self.assertIn('A missing model is still a healthy audio-capable renderer', source)
+
+    def test_main_serializes_legacy_owner_ingress(self):
+        source = (ROOT / "main2.py").read_text(encoding="utf-8")
+        self.assertIn("OrderedLegacyOwnerIngress", source)
+        self.assertEqual(source.count("ordered_owner_ingress.run"), 1)
+
+    def test_pygame_exit_preserves_upstream_layout_state_save(self):
+        source = (ROOT / "live2d_module.py").read_text(encoding="utf-8")
+        self.assertIn("self.save_l2d_json_paths_and_bg()", source)
 
     def test_electron_uses_authoritative_character_folder_name_for_switches(self):
         source = (ROOT.parent / "electron_frontend" / "src" / "renderer" / "App.vue").read_text(encoding="utf-8")
@@ -67,9 +78,10 @@ class Live2DStartupTopologyTest(unittest.TestCase):
 
     def test_control_and_thinking_inputs_enter_owner_ingress(self):
         source = (ROOT / "main2.py").read_text(encoding="utf-8")
-        self.assertIn("ThinkingStateQueue(multiprocessing.Queue(), owner_intent_queue, thinking_item_count)", source)
+        self.assertIn("ThinkingStateQueue(", source)
+        self.assertIn("ingress_queue=thinking_intent_queue", source)
         self.assertIn("LegacyControlIntentFanout(", source)
-        self.assertIn("control_intent_fanout.run", source)
+        self.assertIn("ordered_owner_ingress.run", source)
 
 
 if __name__ == "__main__":

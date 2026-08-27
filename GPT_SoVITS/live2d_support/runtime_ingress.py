@@ -8,9 +8,10 @@ import time
 class ThinkingStateQueue:
     """Compatibility queue that mirrors producer/consumer edges to the owner."""
 
-    def __init__(self, queue, intent_queue, count=None) -> None:
+    def __init__(self, queue, intent_queue, count=None, *, ingress_queue=None) -> None:
         self._queue = queue
         self._intents = intent_queue
+        self._ingress = ingress_queue
         self._count = count
 
     def put(self, value, *args, **kwargs):
@@ -18,7 +19,7 @@ class ThinkingStateQueue:
         if self._count is not None:
             self._change_count(1)
         else:
-            self._intents.put({"type": "thinking_changed", "data": {"active": True}})
+            self._emit_intent({"type": "thinking_changed", "data": {"active": True}})
         return result
 
     def get(self, *args, **kwargs):
@@ -49,7 +50,7 @@ class ThinkingStateQueue:
         except (AttributeError, NotImplementedError):
             empty = False
         if empty:
-            self._intents.put({"type": "thinking_changed", "data": {"active": False}})
+            self._emit_intent({"type": "thinking_changed", "data": {"active": False}})
 
     def _change_count(self, delta: int) -> None:
         lock = self._count.get_lock()
@@ -58,9 +59,12 @@ class ThinkingStateQueue:
             self._count.value = max(0, before + delta)
             after = self._count.value
         if before == 0 and after > 0:
-            self._intents.put({"type": "thinking_changed", "data": {"active": True}})
+            self._emit_intent({"type": "thinking_changed", "data": {"active": True}})
         elif before > 0 and after == 0:
-            self._intents.put({"type": "thinking_changed", "data": {"active": False}})
+            self._emit_intent({"type": "thinking_changed", "data": {"active": False}})
+
+    def _emit_intent(self, intent) -> None:
+        (self._ingress or self._intents).put(intent)
 
 
 class FanoutQueue:
@@ -83,9 +87,9 @@ class LegacyControlIntentFanout:
         self._intents = owner_intents
         self._runtime = runtime_queue
 
-    def run_once(self) -> int:
+    def run_once(self, *, max_items: int | None = None) -> int:
         handled = 0
-        while True:
+        while max_items is None or handled < max_items:
             try:
                 command = self._control.get_nowait()
             except Empty:
@@ -99,14 +103,20 @@ class LegacyControlIntentFanout:
                 else:
                     self._intents.put({"type": "runtime_control", "data": dict(command)})
             handled += 1
-        while True:
+        conversion_handled = 0
+        while max_items is None or conversion_handled < max_items:
             try:
                 conversion = self._conversion.get_nowait()
             except Empty:
                 break
             self._intents.put({"type": "sakiko_conversion", "data": {"value": conversion}})
             handled += 1
+            conversion_handled += 1
         return handled
+
+    @property
+    def owner_intents(self):
+        return self._intents
 
     def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
         while not stop_event.is_set():

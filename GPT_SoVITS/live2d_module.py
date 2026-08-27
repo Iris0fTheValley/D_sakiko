@@ -365,6 +365,7 @@ class Live2DModule:
                 return
             motion_files = model.motion_files_by_group if isinstance(model, Live2DModelAdapter) else {}
             expression_ids = list(model.expression_ids) if isinstance(model, Live2DModelAdapter) else []
+            runtime_version = model.version if isinstance(model, Live2DModelAdapter) else ""
             renderer_fact_queue.put({
                 "type": "renderer_ready",
                 "data": {
@@ -373,6 +374,7 @@ class Live2DModule:
                     "renderer_role": "pygame",
                     "model_token": renderer_model_token,
                     "model_key": self.current_character.character_folder_name,
+                    "runtime_version": runtime_version,
                     "model_json": current_layout_model_path or self.PATH_JSON or "",
                     "motion_files_by_group": motion_files,
                     "expression_ids": expression_ids,
@@ -400,6 +402,9 @@ class Live2DModule:
                     "model_key": "",
                 },
             })
+            # A missing model is still a healthy audio-capable renderer.  The
+            # owner needs this ready fact to preserve upstream audio fallback.
+            emit_renderer_ready()
 
         def emit_renderer_fact(fact: dict) -> None:
             if fact.get("type") == "motion_finished":
@@ -812,6 +817,10 @@ class Live2DModule:
             model.dispose()
         except Exception:
             pass
+        try:
+            self.save_l2d_json_paths_and_bg()
+        except Exception:
+            logger.exception("退出前保存 Live2D 配置失败")
         try:
             glDeleteTextures([texture])
         except Exception:

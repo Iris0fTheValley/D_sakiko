@@ -54,6 +54,7 @@ class SharedRendererHost:
         self._renderer_model_keys: dict[str, str] = {}
         self._renderer_instances: dict[str, str] = {}
         self._renderer_tokens: dict[str, str] = {}
+        self._renderer_runtime_versions: dict[str, str] = {}
         self._renderer_catalogs: dict[str, tuple[str, dict[str, Any], tuple[str, ...]]] = {}
         self._renderer_capabilities: dict[str, dict[str, bool]] = {}
         self._audio_owner_by_command: dict[str, str] = {}
@@ -266,6 +267,7 @@ class SharedRendererHost:
                     )
             self._renderer_instances[renderer_id] = str(data.get("renderer_instance_id") or renderer_id)
             self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
+            self._renderer_runtime_versions[renderer_id] = str(data.get("runtime_version") or "")
             self._renderer_model_keys[renderer_id] = str(data.get("model_key") or "")
             if self._pending_model_switch is not None:
                 expected_token = str(self._pending_model_switch.get("model_token") or "")
@@ -317,6 +319,7 @@ class SharedRendererHost:
             self._renderer_roles.pop(renderer_id, None)
             self._renderer_instances.pop(renderer_id, None)
             self._renderer_tokens.pop(renderer_id, None)
+            self._renderer_runtime_versions.pop(renderer_id, None)
             self._renderer_model_keys.pop(renderer_id, None)
             self._renderer_catalogs.pop(renderer_id, None)
             self._renderer_capabilities.pop(renderer_id, None)
@@ -405,6 +408,7 @@ class SharedRendererHost:
             if renderer_id:
                 self._renderer_model_keys[renderer_id] = model_key
                 self._renderer_tokens[renderer_id] = str(data.get("model_token") or "")
+                self._renderer_runtime_versions[renderer_id] = str(data.get("runtime_version") or "")
             urls = data.get("model_urls")
             if isinstance(urls, Mapping):
                 normalized_urls = {str(key): str(value) for key, value in urls.items() if value}
@@ -547,6 +551,16 @@ class SharedRendererHost:
 
     def start_sakiko_conversion(self, conversion, model_urls: Mapping[str, str]) -> bool:
         """Decide once; the renderer only reloads the requested model."""
+        # Apply the upstream guard even when the current runtime is
+        # audio-only because its model has no motion capability.
+        canonical_id = self._canonical_runtime_id()
+        if canonical_id is not None:
+            canonical_key = self._renderer_model_keys.get(canonical_id, "").lower()
+            runtime_version = self._renderer_runtime_versions.get(canonical_id, "").lower()
+            if canonical_key and canonical_key != "sakiko":
+                return False
+            if runtime_version and runtime_version != "v2":
+                return False
         # A newer Sakiko conversion supersedes a normal model switch that has
         # not crossed its renderer barrier yet.
         self._pending_model_switch = None
@@ -812,6 +826,7 @@ class SharedRendererHost:
                 self._scheduler.motion_finished("emotion")
                 self._emit_audio(self._behavior.motion_rejected(token), active)
         if not started:
+            self._scheduler.motion_rejected("emotion")
             self._clear_motion_tracking(token)
             return
         if self._motion_finished.get(token, set()) >= started:
@@ -878,6 +893,16 @@ class SharedRendererHost:
             if candidates:
                 return candidates[0]
         return sorted(motion_renderers)[0] if motion_renderers else None
+
+    def _canonical_runtime_id(self) -> str | None:
+        for role in ("pygame", "electron"):
+            candidates = sorted(
+                renderer_id for renderer_id in self._renderer_ids
+                if self._renderer_roles.get(renderer_id) == role
+            )
+            if candidates:
+                return candidates[0]
+        return sorted(self._renderer_ids)[0] if self._renderer_ids else None
 
     def _apply_canonical_catalog(self) -> None:
         renderer_id = self._canonical_renderer_id()
@@ -1043,12 +1068,33 @@ class SharedRendererService:
             except Empty:
                 break
             self._pending_intents.append(intent)
+        emotion_processed = False
         while self._pending_intents:
             intent = self._pending_intents[0]
             if not isinstance(intent, Mapping):
                 self._pending_intents.popleft()
                 continue
             intent_type = intent.get("type")
+            if intent_type == "emotion_segment":
+                # Controls, thinking edges, and conversions are handled before
+                # the emotion branch in the upstream Pygame frame.  Preserve
+                # that priority even if independent producers reached the
+                # owner queue in the opposite order.
+                control_index = next(
+                    (index for index, candidate in enumerate(self._pending_intents)
+                     if isinstance(candidate, Mapping) and candidate.get("type") != "emotion_segment"),
+                    None,
+                )
+                if control_index is not None:
+                    selected = self._pending_intents[control_index]
+                    del self._pending_intents[control_index]
+                    self._pending_intents.appendleft(selected)
+                    intent = self._pending_intents[0]
+                    intent_type = intent.get("type")
+            if intent_type == "emotion_segment" and emotion_processed:
+                # Upstream consumes at most one emotion/audio pair per frame.
+                # Keep later pairs queued for the next owner cycle.
+                break
             # Emotion segments require a renderer catalog; lifecycle/control
             # intents must still be consumed when model loading failed.
             if intent_type == "emotion_segment" and not self._host.ready:
@@ -1096,6 +1142,17 @@ class SharedRendererService:
                             candidate for candidate in self._pending_intents
                             if not (isinstance(candidate, Mapping) and candidate.get("type") == "emotion_segment")
                         )
+                        # Also discard emotion intents that arrived in the
+                        # transport queue while cancellation was being routed.
+                        retained = []
+                        while True:
+                            try:
+                                queued = self._intents.get_nowait()
+                            except Empty:
+                                break
+                            if not (isinstance(queued, Mapping) and queued.get("type") == "emotion_segment"):
+                                retained.append(queued)
+                        self._pending_intents.extend(retained)
                     handled += int(isinstance(data, Mapping) and self._host.handle_runtime_control(data))
                 continue
             data = intent.get("data", {})
@@ -1106,6 +1163,7 @@ class SharedRendererService:
                 emotion=str(data.get("emotion", "")), audio_path=str(data.get("audio_path", "")),
                 audio_duration_seconds=float(data.get("audio_duration_seconds", 0.0) or 0.0),
             ))
+            emotion_processed = True
         handled += int(self._host.tick())
         return handled
 

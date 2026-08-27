@@ -57,3 +57,37 @@ class LegacyEmotionAudioFanout:
         while not stop_event.is_set():
             if not self.run_once():
                 time.sleep(poll_interval_seconds)
+
+
+class OrderedLegacyOwnerIngress:
+    """Serialize legacy owner ingress in the upstream Pygame order.
+
+    The old loop handles controls/conversion before consuming one emotion and
+    its paired audio item.  Keeping these consumers on one worker prevents
+    independent fanout threads from reordering a cancel or conversion ahead of
+    an already-visible Pygame event.
+    """
+
+    def __init__(self, emotion_fanout: LegacyEmotionAudioFanout, control_fanout,
+                 thinking_intents=None) -> None:
+        self._emotion = emotion_fanout
+        self._control = control_fanout
+        self._thinking = thinking_intents
+
+    def run_once(self) -> int:
+        # The legacy loop consumes one control, then one conversion, then one
+        # thinking edge, and finally one emotion/audio pair per frame.
+        handled = self._control.run_once(max_items=1)
+        if self._thinking is not None:
+            try:
+                self._control.owner_intents.put(self._thinking.get_nowait())
+                handled += 1
+            except Empty:
+                pass
+        handled += int(self._emotion.run_once())
+        return handled
+
+    def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
+        while not stop_event.is_set():
+            if self.run_once() == 0:
+                time.sleep(poll_interval_seconds)

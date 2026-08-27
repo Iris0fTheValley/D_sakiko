@@ -54,4 +54,25 @@ class SchedulerTest(unittest.TestCase):
         self.s.set_motion_over(True); self.assertIsNone(self.s.idle_recover_due())
         self.clock.value = 5.0; self.assertEqual(self.s.idle_recover_due().purpose, "idle_recover")
 
+    def test_missing_idle_motion_does_not_block_timed_idle(self):
+        self.s.set_catalog({"IDLE": 1})
+        self.clock.value = 2.5
+        self.assertIsNone(self.s.tick())
+        self.clock.value = 25.0
+        self.assertEqual(self.s.tick().purpose, "timed_idle")
+
+    def test_idle_recovery_does_not_starve_next_timed_idle(self):
+        self.clock.value = 2.5
+        self.assertEqual(self.s.tick().purpose, "idle_recover")
+        self.s.motion_finished("idle_recover")
+        self.clock.value = 25.0
+        self.assertEqual(self.s.tick().purpose, "timed_idle")
+
+    def test_rejected_long_audio_motion_cannot_schedule_repeat(self):
+        self.s.start_segment("happiness", 6.0)
+        self.s.motion_rejected("emotion")
+        self.s.set_audio_busy(True)
+        self.clock.value = 2.5
+        self.assertIsNone(self.s.tick())
+
 if __name__ == '__main__': unittest.main()
