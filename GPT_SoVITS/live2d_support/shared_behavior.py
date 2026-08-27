@@ -77,6 +77,11 @@ class SharedLive2DBehavior:
             for group, count in motions.items()
             if int(count) > 0
         }
+        # Counts-only reports do not carry file or expression facts.  Drop
+        # any previous detailed catalog so a later decision cannot reuse
+        # state from the old model.
+        self._motion_files_by_group = {}
+        self._expression_ids = frozenset()
 
     def set_model_catalog(
         self,
@@ -90,12 +95,13 @@ class SharedLive2DBehavior:
         intentionally data-only: neither renderer gets to make a second
         selection after this method has accepted the facts.
         """
-        self._motion_files_by_group = {
+        normalized = {
             str(group): tuple(str(path) for path in files)
             for group, files in motion_files_by_group.items()
         }
+        self.set_capabilities({group: len(files) for group, files in normalized.items()})
+        self._motion_files_by_group = normalized
         self._expression_ids = frozenset(str(expression_id) for expression_id in expression_ids)
-        self.set_capabilities({group: len(files) for group, files in self._motion_files_by_group.items()})
 
     def start_emotion_segment(
         self, *, turn_id: str, segment_id: str, emotion: str,

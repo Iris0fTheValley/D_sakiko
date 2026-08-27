@@ -41,6 +41,10 @@ class SharedBehaviorScheduler:
 
     def set_catalog(self, catalog: Mapping[str, int]) -> None:
         self._catalog = {str(group): int(count) for group, count in catalog.items() if int(count) > 0}
+        # A counts-only catalog supersedes any detailed file/expression facts
+        # from the previous model.
+        self._motion_files = {}
+        self._expression_ids = frozenset()
         self._resolved_groups = {}
         for group in self._catalog:
             base, separator, suffix = group.rpartition("_")
@@ -50,9 +54,10 @@ class SharedBehaviorScheduler:
             self._resolved_groups.setdefault(group, group)
 
     def set_model_catalog(self, motion_files_by_group: Mapping[str, Iterable[str]], expression_ids: Iterable[str] = ()) -> None:
-        self._motion_files = {str(group): tuple(str(path) for path in files) for group, files in motion_files_by_group.items()}
+        normalized = {str(group): tuple(str(path) for path in files) for group, files in motion_files_by_group.items()}
+        self.set_catalog({group: len(files) for group, files in normalized.items()})
+        self._motion_files = normalized
         self._expression_ids = frozenset(str(value) for value in expression_ids)
-        self.set_catalog({group: len(files) for group, files in self._motion_files.items()})
 
     def set_thinking(self, active: bool) -> None:
         if active == self._thinking:

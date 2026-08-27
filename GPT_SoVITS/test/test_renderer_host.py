@@ -394,6 +394,52 @@ class RendererHostTest(unittest.TestCase):
         self.assertTrue(self.host.start_emotion_segment(turn_id="t", segment_id="s", emotion="LABEL_0", audio_path="a.wav"))
         self.assertEqual(self.out[-1]["data"]["target_renderer_ids"], ["electron", "pygame"])
 
+    def test_owner_fanout_preserves_exact_motion_fields_for_both_renderers(self):
+        pygame_commands, electron_commands = Queue(), Queue()
+        from live2d_support.runtime_ingress import FanoutQueue
+        host = SharedRendererHost(
+            FanoutQueue(pygame_commands, electron_commands).put,
+            AuthoritativeLive2DOwner(rng=Random(3)),
+        )
+        catalog = {
+            "renderer_id": "pygame", "renderer_role": "pygame",
+            "motion_files_by_group": {"happiness": ["happy_smile.mtn", "happy_other.mtn"]},
+            "expression_ids": ["exp_smile01"],
+        }
+        host.handle_renderer_fact({"type": "renderer_ready", "data": catalog})
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            **catalog, "renderer_id": "electron", "renderer_role": "electron",
+        }})
+        self.assertTrue(host.start_emotion_segment(
+            turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
+        ))
+        pygame_motion = pygame_commands.get_nowait()
+        electron_motion = electron_commands.get_nowait()
+        self.assertEqual(pygame_motion["type"], electron_motion["type"])
+        for field in ("group", "index", "expression_id", "token"):
+            self.assertEqual(pygame_motion["data"].get(field), electron_motion["data"].get(field), field)
+
+    def test_counts_only_renderer_catalog_drops_old_expression_mapping(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(2)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame",
+            "motion_files_by_group": {"happiness": ["happy_smile.mtn"]},
+            "expression_ids": ["exp_smile01"],
+        }})
+        self.assertTrue(host.start_emotion_segment(
+            turn_id="turn", segment_id="detailed", emotion="LABEL_0", audio_path="answer.wav",
+        ))
+        self.assertEqual(self.out[-1]["data"]["expression_id"], "exp_smile01")
+
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame",
+            "motion_groups": {"happiness": 1},
+        }})
+        self.assertTrue(host.start_emotion_segment(
+            turn_id="turn", segment_id="counts-only", emotion="LABEL_0", audio_path="answer.wav",
+        ))
+        self.assertIsNone(self.out[-1]["data"]["expression_id"])
+
     def test_conversion_waits_for_every_renderer_with_matching_model_token(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(1)))
         host.handle_renderer_fact({"type":"renderer_ready","data":{"renderer_id":"pygame","renderer_role":"pygame","model_token":"old","model_urls":{"white":"pygame-white.model.json"},"motion_groups":{"change_character":1}}})

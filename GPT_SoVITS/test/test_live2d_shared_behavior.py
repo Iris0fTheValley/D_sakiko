@@ -81,6 +81,26 @@ class SharedLive2DBehaviorTraceTestCase(unittest.TestCase):
         self.assertIn(command.motion.index, range(2))
         self.assertEqual(command.motion.expression_id, "exp_smile01")
 
+    def test_counts_only_catalog_clears_previous_motion_and_expression_facts(self) -> None:
+        self.behavior.set_model_catalog(
+            {"happiness": ("happy_smile.mtn",)},
+            expression_ids=("exp_smile01",),
+        )
+        detailed = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="detailed", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        assert detailed is not None and detailed.motion is not None
+        self.assertEqual(detailed.motion.expression_id, "exp_smile01")
+
+        # A renderer may only report group counts after a model reload.  The
+        # old file-name/expression facts must not leak into the next decision.
+        self.behavior.set_capabilities({"happiness": 1})
+        counts_only = self.behavior.start_emotion_segment(
+            turn_id="turn", segment_id="counts-only", emotion="LABEL_0", audio_path="answer.wav",
+        )
+        assert counts_only is not None and counts_only.motion is not None
+        self.assertIsNone(counts_only.motion.expression_id)
+
     def test_failure_and_stale_facts_cannot_leave_segment_busy(self) -> None:
         command = self.behavior.start_emotion_segment(
             turn_id="turn", segment_id="segment", emotion="LABEL_0", audio_path="answer.wav",
