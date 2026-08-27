@@ -21,10 +21,12 @@ def renderer_mode() -> str:
         return override
     try:
         with CONFIG_PATH.open("r", encoding="utf-8") as stream:
-            configured = str(json.load(stream).get("ui_state", {}).get("live2d_renderer", "electron")).lower()
-            return configured if configured in {"pygame", "electron"} else "electron"
+            configured = str(json.load(stream).get("ui_state", {}).get("live2d_renderer", "pygame")).lower()
+            return configured if configured in {"pygame", "electron"} else "pygame"
     except (OSError, json.JSONDecodeError, AttributeError):
-        return "electron"
+        # Pygame is the compatibility renderer and remains the conservative
+        # choice when no explicit renderer has been configured.
+        return "pygame"
 
 
 def dual_renderer_enabled() -> bool:
@@ -44,6 +46,12 @@ def wait_for_bridge(timeout: float = 30.0) -> bool:
     return False
 
 
+def electron_command(electron_root: Path) -> Path:
+    """Return the local Electron launcher for the current platform."""
+    name = "electron.cmd" if os.name == "nt" else "electron"
+    return electron_root / "node_modules" / ".bin" / name
+
+
 def main() -> int:
     python_executable = Path(sys.executable)
     main_script = ROOT / "GPT_SoVITS" / "main2.py"
@@ -56,11 +64,11 @@ def main() -> int:
             if not wait_for_bridge():
                 print("Bridge 在 30 秒内未就绪，未启动 Electron。", file=sys.stderr)
                 return 1
-            electron_command = electron_root / "node_modules" / ".bin" / "electron.cmd"
-            if not electron_command.is_file():
-                print(f"Electron 依赖不存在：{electron_command}", file=sys.stderr)
+            electron_executable = electron_command(electron_root)
+            if not electron_executable.is_file():
+                print(f"Electron 依赖不存在：{electron_executable}", file=sys.stderr)
                 return 1
-            electron_process = subprocess.Popen([str(electron_command), "."], cwd=electron_root)
+            electron_process = subprocess.Popen([str(electron_executable), "."], cwd=electron_root)
         return python_process.wait()
     finally:
         if python_process.poll() is None:

@@ -8,6 +8,7 @@ app.commandLine.appendSwitch('ignore-gpu-blacklist')
 let mainWindow: BrowserWindow | null = null
 let windowStateTimer: ReturnType<typeof setInterval> | null = null
 let lastWindowState = ''
+let ipcHandlersRegistered = false
 
 function publishWindowState(force = false) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
@@ -68,6 +69,12 @@ function createWindow() {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  if (ipcHandlersRegistered) {
+    windowStateTimer = setInterval(publishWindowState, 16)
+    return
+  }
+  ipcHandlersRegistered = true
 
   ipcMain.on('window-state-ready', () => publishWindowState(true))
 

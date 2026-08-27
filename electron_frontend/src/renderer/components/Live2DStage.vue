@@ -23,10 +23,7 @@ function onCanvasClick(e: MouseEvent) {
 
 onMounted(async () => {
   const { Application, Ticker } = await import('pixi.js')
-  const { Live2DModel } = await import('pixi-live2d-display/cubism2')
-
-  // 教训 #5：注册 Ticker，缺了不渲染
-  Live2DModel.registerTicker(Ticker)
+  const { Live2DModel } = await import('pixi-live2d-display')
 
   const canvas = canvasContainer.value?.querySelector('canvas') as HTMLCanvasElement
   if (!canvas) return
@@ -50,6 +47,9 @@ onMounted(async () => {
     }
     const modelSrc = props.modelPath
     const key = props.modelKey || 'live2d'
+    // The package root combines Cubism 2 and Cubism 4 adapters and selects
+    // the correct loader from the model JSON, preserving V2 and V3/V4.
+    Live2DModel.registerTicker(Ticker)
     const live2dModel = await Live2DModel.from(modelSrc, { autoInteract: false })
 
     // Electron 默认窗口尺寸是 450x600。这个基准必须在换模时保持稳定；

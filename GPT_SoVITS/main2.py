@@ -51,10 +51,10 @@ def resolve_renderer_mode() -> tuple[str, bool]:
     if override in {"pygame", "electron"}:
         mode = override
     else:
-        mode = "electron"
+        mode = "pygame"
         try:
             with open(os.path.join(project_root, "d_sakiko_config.json"), "r", encoding="utf-8") as stream:
-                configured = str(json.load(stream).get("ui_state", {}).get("live2d_renderer", "electron")).lower()
+                configured = str(json.load(stream).get("ui_state", {}).get("live2d_renderer", "pygame")).lower()
                 if configured in {"pygame", "electron"}:
                     mode = configured
         except (OSError, ValueError, TypeError):

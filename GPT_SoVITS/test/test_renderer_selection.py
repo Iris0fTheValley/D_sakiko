@@ -36,18 +36,33 @@ class RendererSelectionTest(unittest.TestCase):
             with patch.dict(os.environ, {"DSAKIKO_RENDERER": "electron"}, clear=True):
                 self.assertEqual(launcher.renderer_mode(), "electron")
 
-    def test_missing_or_invalid_config_uses_historical_electron_default(self):
+    def test_missing_or_invalid_config_uses_compatibility_pygame_default(self):
         launcher = load_launcher()
         with tempfile.TemporaryDirectory() as directory:
             launcher.CONFIG_PATH = Path(directory) / "missing.json"
             with patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(launcher.renderer_mode(), "electron")
+                self.assertEqual(launcher.renderer_mode(), "pygame")
             launcher.CONFIG_PATH.write_text(
                 json.dumps({"ui_state": {"live2d_renderer": "invalid"}}),
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(launcher.renderer_mode(), "electron")
+                self.assertEqual(launcher.renderer_mode(), "pygame")
+
+    def test_electron_command_is_platform_specific(self):
+        launcher = load_launcher()
+        root = Path("/tmp/electron")
+        with patch.object(launcher.os, "name", "nt"):
+            self.assertEqual(launcher.electron_command(root).name, "electron.cmd")
+        with patch.object(launcher.os, "name", "posix"):
+            self.assertEqual(launcher.electron_command(root).name, "electron")
+
+    def test_main2_and_launcher_share_pygame_fallback(self):
+        import main2
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "missing.json"
+            with patch.object(main2, "project_root", directory), patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(main2.resolve_renderer_mode(), ("pygame", False))
 
 
 if __name__ == "__main__":

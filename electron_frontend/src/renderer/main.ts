@@ -25,6 +25,14 @@ if (theme === 'dark') {
 }
 
 async function bootstrap() {
+  // Cubism 3/4 models are selected at runtime, so load the local Core
+  // library opportunistically. Cubism 2 remains fully independent of it.
+  try {
+    await loadScript('./sdk/live2dcubismcore.min.js')
+    console.log('[SDK] Cubism 4 Core loaded')
+  } catch (e) {
+    console.warn('[SDK] Cubism 4 Core not found:', e)
+  }
   try {
     // Production Electron loads the renderer with file://.  Keep this
     // relative so the packaged dist/renderer/sdk files are found; an

@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from queue import Queue
 
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -19,6 +21,36 @@ from live2d_support.renderer_host import SharedRendererHost
 
 
 class BridgeRuntimeFactTest(unittest.TestCase):
+    def test_audio_server_rejects_path_traversal_and_binds_loopback(self):
+        async def exercise():
+            with tempfile.TemporaryDirectory() as root_dir:
+                root = Path(root_dir)
+                (root / "ok.wav").write_bytes(b"ok")
+                outside = root.parent / "outside-live2d-secret.txt"
+                outside.write_text("secret", encoding="utf-8")
+                bridge = Bridge(Queue(), audio_base=str(root), audio_port=0)
+                await bridge._start_audio_server()
+                self.assertIsNotNone(bridge._audio_server)
+                sockets = bridge._audio_server.sockets
+                self.assertEqual(sockets[0].getsockname()[0], "127.0.0.1")
+                port = sockets[0].getsockname()[1]
+
+                async def request(path):
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                    writer.write(f"GET {path} HTTP/1.0\\r\\n\\r\\n".encode())
+                    await writer.drain()
+                    response = await reader.read()
+                    writer.close()
+                    await writer.wait_closed()
+                    return response
+
+                self.assertTrue((await request("/audio/ok.wav")).startswith(b"HTTP/1.0 200"))
+                self.assertTrue((await request("/audio/../outside-live2d-secret.txt")).startswith(b"HTTP/1.0 404"))
+                bridge._audio_server.close()
+                await bridge._audio_server.wait_closed()
+
+        asyncio.run(exercise())
+
     def test_model_switch_is_never_replayed_by_bridge_snapshot(self):
         bridge = Bridge(Queue())
         for targets in (["pygame-renderer"], ["electron-one"], None):
