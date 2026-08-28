@@ -179,6 +179,10 @@ class SharedRendererHost:
             payload = dict(data)
             payload.pop("type", None)
             payload.setdefault("model_token", uuid4().hex)
+            # Upstream resets the segment-local repeat loop as soon as a
+            # normal model switch is accepted.  Keep global idle/thinking
+            # deadlines intact.
+            self._scheduler.reset_long_audio()
             # A normal Qt model switch is a newer authoritative decision than
             # any completed Sakiko conversion barrier.  Retire conversion
             # delivery/replay state without touching persistent Sakiko
@@ -556,15 +560,19 @@ class SharedRendererHost:
 
     def start_sakiko_conversion(self, conversion, model_urls: Mapping[str, str]) -> bool:
         """Decide once; the renderer only reloads the requested model."""
+        # Upstream retires the previous segment repeat loop as soon as a
+        # conversion intent is observed, even when the runtime gate rejects
+        # that conversion.
+        self._scheduler.reset_long_audio()
         # Apply the upstream guard even when the current runtime is
         # audio-only because its model has no motion capability.
         canonical_id = self._canonical_runtime_id()
         if canonical_id is not None:
             canonical_key = self._renderer_model_keys.get(canonical_id, "").lower()
             runtime_version = self._renderer_runtime_versions.get(canonical_id, "").lower()
-            if canonical_key and canonical_key != "sakiko":
+            if canonical_key != "sakiko":
                 return False
-            if runtime_version and runtime_version != "v2":
+            if runtime_version != "v2":
                 return False
         # A newer Sakiko conversion supersedes a normal model switch that has
         # not crossed its renderer barrier yet.
@@ -617,10 +625,19 @@ class SharedRendererHost:
             command = ScheduledMotion(command.group, command.index, command.priority, command.purpose, expression)
         return self._emit_scheduled(command, replay_for_late_renderers=True)
 
-    def tick(self) -> bool:
+    def tick(self, *, include_long_audio: bool = True) -> bool:
+        if self.model_switch_pending:
+            return False
         if self._renderer_ids and not self._motion_renderer_ids():
             return False
-        return self._emit_scheduled(self._scheduler.tick())
+        return self._emit_scheduled(self._scheduler.tick(include_long_audio=include_long_audio))
+
+    def tick_long_audio(self) -> bool:
+        if self.model_switch_pending:
+            return False
+        if self._renderer_ids and not self._motion_renderer_ids():
+            return False
+        return self._emit_scheduled(self._scheduler.tick_long_audio())
 
     def _emit_scheduled(self, scheduled: ScheduledMotion | None, *, replay_for_late_renderers: bool = False) -> bool:
         if scheduled is None:
@@ -1077,12 +1094,19 @@ class SharedRendererService:
                 break
             self._pending_intents.append(intent)
         emotion_processed = False
+        scheduler_phase_done = False
         while self._pending_intents:
             intent = self._pending_intents[0]
             if not isinstance(intent, Mapping):
                 self._pending_intents.popleft()
                 continue
             intent_type = intent.get("type")
+            if not scheduler_phase_done and intent_type not in {"runtime_control", "thinking_changed"}:
+                # Match the upstream frame: controls and thinking edges are
+                # consumed first, then due scheduler work runs before
+                # conversion/emotion input is consumed.
+                handled += int(self._host.tick(include_long_audio=False))
+                scheduler_phase_done = True
             if intent_type == "emotion_segment" and self._host.model_switch_pending:
                 # A switch command is a renderer barrier.  Leave the segment
                 # queued until the matching ready fact commits its catalog.
@@ -1160,7 +1184,10 @@ class SharedRendererService:
                 audio_duration_seconds=float(data.get("audio_duration_seconds", 0.0) or 0.0),
             ))
             emotion_processed = True
-        handled += int(self._host.tick())
+        if not scheduler_phase_done:
+            handled += int(self._host.tick(include_long_audio=False))
+        # Upstream checks long-audio repeats after conversion and emotion.
+        handled += int(self._host.tick_long_audio())
         return handled
 
     def wait_for_bye(self, timeout_seconds: float = 2.0) -> bool:

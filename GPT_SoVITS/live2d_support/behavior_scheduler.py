@@ -30,6 +30,8 @@ class SharedBehaviorScheduler:
         self._thinking = False
         self._think_motion_over = True
         self._thinking_due: float | None = None
+        self._thinking_last_at: float | None = now
+        self._thinking_interval = 1.0
         self._motion_over = True
         self._audio_busy = False
         # Upstream starts with no completed-motion recovery edge.  The first
@@ -66,9 +68,11 @@ class SharedBehaviorScheduler:
             return
         self._thinking = active
         if active:
-            self._thinking_due = self._clock() + (1.0 if self._think_motion_over else 15.0)
-        else:
-            self._thinking_due = None
+            now = self._clock()
+            self._thinking_due = (
+                now + 1.0 if self._thinking_last_at is None
+                else self._thinking_last_at + self._thinking_interval
+            )
 
     def set_audio_busy(self, busy: bool) -> None:
         self._audio_busy = busy
@@ -95,30 +99,28 @@ class SharedBehaviorScheduler:
         leave a stale long-audio timer armed.
         """
         self._motion_over = True
+        self.reset_long_audio()
+        self._idle_recover_due = self._clock() + 2.5
+
+    def reset_long_audio(self) -> None:
+        """Drop segment-local repeats without touching global idle timers."""
         self._long_group = ""
         self._long_enabled = False
         self._long_due = None
         self._long_repeats = 0
-        self._idle_recover_due = self._clock() + 2.5
 
     def reset_after_cancel(self) -> None:
         """Reset all scheduler lifecycle state after an owner cancellation."""
-        now = self._clock()
         self._thinking = False
         self._think_motion_over = True
-        self._thinking_due = None
         self._motion_over = True
         self._audio_busy = False
-        self._idle_recover_due = now + 2.5
-        self._timed_idle_due = now + 25.0
-        self._long_group = ""
-        self._long_enabled = False
-        self._long_due = None
-        self._long_repeats = 0
+        # Upstream cancel stops active work but preserves the wall-clock
+        # deadlines used by last_saved_time and idle_recover_timer.
+        self.reset_long_audio()
 
     def start_segment(self, group: str, audio_duration_seconds: float) -> None:
         self._thinking = False
-        self._thinking_due = None
         self._motion_over = False
         self._long_group = group
         self._long_enabled = audio_duration_seconds >= 6.0
@@ -146,8 +148,6 @@ class SharedBehaviorScheduler:
         now = self._clock()
         if purpose == "thinking":
             self._think_motion_over = True
-            if self._thinking:
-                self._thinking_due = now + 15.0
             return
         self._motion_over = True
         if purpose == "idle_recover":
@@ -172,9 +172,9 @@ class SharedBehaviorScheduler:
         self._think_motion_over = True
         return self._exact("IDLE", 1, "click") if is_sakiko else None
 
-    def tick(self) -> ScheduledMotion | None:
+    def tick(self, *, include_long_audio: bool = True) -> ScheduledMotion | None:
         now = self._clock()
-        if self._long_due is not None and now >= self._long_due:
+        if include_long_audio and self._long_due is not None and now >= self._long_due:
             self._long_due = None
             if self._audio_busy and self._motion_over and self._long_repeats < 2:
                 command = self._exact(self._long_group, 3, "long_audio_repeat")
@@ -184,7 +184,9 @@ class SharedBehaviorScheduler:
         if self._thinking and self._think_motion_over and self._thinking_due is not None and now >= self._thinking_due:
             command = self._exact("text_generating", 3, "thinking")
             if command is not None:
-                self._thinking_due = now + 15.0
+                self._thinking_last_at = now
+                self._thinking_interval = 15.0
+                self._thinking_due = now + self._thinking_interval
                 return command
         if self._motion_over and not self._audio_busy and not self._thinking and now >= self._idle_recover_due:
             command = self._exact("idle_motion", 1, "idle_recover")
@@ -197,6 +199,19 @@ class SharedBehaviorScheduler:
             if not self._audio_busy and not self._thinking:
                 return self._exact("IDLE", 1, "timed_idle")
         return None
+
+    def tick_long_audio(self) -> ScheduledMotion | None:
+        """Run only the post-emotion long-audio phase."""
+        now = self._clock()
+        if self._long_due is None or now < self._long_due:
+            return None
+        self._long_due = None
+        if not self._audio_busy or not self._motion_over or self._long_repeats >= 2:
+            return None
+        command = self._exact(self._long_group, 3, "long_audio_repeat")
+        if command is not None:
+            self._long_repeats += 1
+        return command
 
     def timed_idle_due(self) -> ScheduledMotion | None:
         """Master's 25-second IDLE check; always advances its deadline."""

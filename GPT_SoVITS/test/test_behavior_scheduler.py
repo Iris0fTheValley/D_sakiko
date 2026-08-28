@@ -17,6 +17,20 @@ class SchedulerTest(unittest.TestCase):
         self.clock.value = 1.0; self.assertEqual(self.s.tick().purpose, "thinking")
         self.s.motion_finished("thinking"); self.clock.value = 15.9; self.assertIsNone(self.s.tick())
         self.clock.value = 16.0; self.assertEqual(self.s.tick().purpose, "thinking")
+
+    def test_thinking_deadline_survives_a_session_boundary(self):
+        self.clock.value = 0.5
+        self.s.set_thinking(True)
+        self.clock.value = 1.1
+        self.assertEqual(self.s.tick().purpose, "thinking")
+        self.s.motion_finished("thinking")
+        self.s.set_thinking(False)
+        self.clock.value = 5.0
+        self.s.set_thinking(True)
+        self.clock.value = 15.9
+        self.assertIsNone(self.s.tick())
+        self.clock.value = 16.1
+        self.assertEqual(self.s.tick().purpose, "thinking")
     def test_long_audio_is_fact_gated_and_bounded(self):
         self.s.start_segment("happiness", 6.0); self.s.set_audio_busy(True); self.s.motion_finished("emotion")
         self.clock.value = 2.5; self.assertEqual(self.s.tick().purpose, "long_audio_repeat")
@@ -87,5 +101,20 @@ class SchedulerTest(unittest.TestCase):
         self.assertIsNone(self.s.tick())
         self.clock.value = 50.0
         self.assertEqual(self.s.tick().purpose, "timed_idle")
+
+    def test_cancel_preserves_near_deadline_timed_idle(self):
+        self.clock.value = 24.0
+        self.s.reset_after_cancel()
+        self.clock.value = 25.0
+        self.assertEqual(self.s.tick().purpose, "timed_idle")
+
+    def test_reset_long_audio_does_not_touch_idle_or_thinking_deadlines(self):
+        self.s.set_thinking(True)
+        self.s.start_segment("happiness", 6.0)
+        self.s.set_audio_busy(True)
+        self.s.reset_long_audio()
+        self.clock.value = 2.5
+        self.assertIsNone(self.s.tick_long_audio())
+        self.assertTrue(self.s._thinking_due == 1.0)
 
 if __name__ == '__main__': unittest.main()
