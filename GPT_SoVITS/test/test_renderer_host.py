@@ -358,6 +358,44 @@ class RendererHostTest(unittest.TestCase):
         }})
         self.assertFalse(null_host.start_sakiko_conversion(True, {"black": "black.model.json"}))
 
+    def test_conversion_state_commits_only_after_motion_success(self):
+        committed = []
+        host = SharedRendererHost(
+            self.out.append,
+            AuthoritativeLive2DOwner(rng=Random(0)),
+            conversion_state_callback=lambda black, mask: committed.append((black, mask)),
+        )
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
+        self.assertTrue(host._sakiko_conversion.is_black)
+        switch = self.out[-1]
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": switch["data"]["model_token"],
+            "motion_groups": {"change_character": 1, "change_character_maskoff": 1},
+        }})
+        motion = self.out[-1]
+        host.handle_renderer_fact({"type": "motion_rejected", "data": {"renderer_id": "pygame", "token": motion["data"]["token"]}})
+        self.assertEqual(committed, [])
+
+    def test_stale_ready_does_not_replace_pending_conversion_catalog(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": "old", "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
+        token = host._pending_conversion_model_token
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": "stale", "motion_groups": {"happiness": 9},
+        }})
+        self.assertEqual(host._renderer_catalogs["pygame"][1], {"change_character": 1})
+        self.assertEqual(host._pending_conversion_model_token, token)
+
     def test_upstream_phase_trace_timed_idle_then_conversion(self):
         clock = type("Clock", (), {"value": 0.0, "__call__": lambda self: self.value})()
         intents, facts, commands = Queue(), Queue(), Queue()
@@ -455,6 +493,78 @@ class RendererHostTest(unittest.TestCase):
             "motion_files_by_group": {}, "capabilities": {"motion": False, "audio": True},
         }})
         self.assertFalse(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+
+    def test_electron_ready_without_runtime_version_can_join_conversion(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "electron", "renderer_role": "electron", "model_key": "sakiko",
+            "model_token": "old", "model_urls": {"white": "white.model.json"},
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
+
+    def test_electron_audio_only_runtime_rejects_sakiko_conversion(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "electron", "renderer_role": "electron", "model_key": "sakiko",
+            "capabilities": {"motion": False, "audio": True},
+        }})
+        self.assertFalse(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+
+    def test_newer_conversion_wins_over_late_old_ready(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": "old",
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
+        old_token = host._pending_conversion_model_token
+        self.assertTrue(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
+        new_token = host._pending_conversion_model_token
+        self.assertNotEqual(old_token, new_token)
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": old_token,
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertEqual(host._pending_conversion_model_token, new_token)
+        self.assertTrue(host._pending_conversion is not None)
+
+    def test_conversion_disconnect_without_motion_renderer_is_discarded(self):
+        committed = []
+        host = SharedRendererHost(
+            self.out.append, AuthoritativeLive2DOwner(rng=Random(0)),
+            conversion_state_callback=lambda black, mask: committed.append((black, mask)),
+        )
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "electron", "renderer_role": "electron", "model_key": "sakiko",
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
+        token = host._pending_conversion_model_token
+        host.handle_renderer_fact({"type": "renderer_disconnected", "data": {"renderer_id": "electron"}})
+        self.assertIsNone(host._pending_conversion)
+        self.assertIsNone(host._conversion_replay_motion)
+        self.assertEqual(committed, [])
+        self.assertFalse(any(m.get("type") == "play_motion" and m.get("data", {}).get("model_token") == token for m in self.out))
+
+    def test_stale_ready_does_not_replace_renderer_metadata(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one", "renderer_role": "pygame",
+            "model_key": "sakiko", "runtime_version": "v2", "model_token": "old",
+            "motion_groups": {"change_character": 1},
+        }})
+        host.handle_runtime_control({"type": "switch_live2d", "character_folder_name": "anon", "model_json": "anon.model.json"})
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one", "renderer_role": "electron",
+            "model_key": "sakiko", "runtime_version": "v3", "model_token": "stale",
+            "motion_groups": {"happiness": 9},
+        }})
+        self.assertEqual(host._renderer_roles["pygame"], "pygame")
+        self.assertEqual(host._renderer_runtime_versions["pygame"], "v2")
+        self.assertEqual(host._renderer_model_keys["pygame"], "sakiko")
     def test_bye_closes_only_after_matching_motion_finished(self):
         self.host.handle_renderer_fact({"type":"renderer_ready","data":{"motion_groups":{"bye":1}}})
         self.assertTrue(self.host.start_bye()); token=self.out[-1]["data"]["token"]
@@ -1121,13 +1231,13 @@ class RendererHostTest(unittest.TestCase):
         host.handle_renderer_fact({"type": "renderer_ready", "data": {
             "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko", "runtime_version": "v2", "model_token": "old",
             "model_urls": {"black": "black.model.json", "white": "white.model.json"},
-            "motion_groups": {"change_character": 1},
+            "motion_groups": {"change_character": 1, "change_character_maskoff": 1},
         }})
         self.assertTrue(host.start_sakiko_conversion(True, {"black": "black.model.json"}))
         conversion_token = self.out[-1]["data"]["model_token"]
         host.handle_renderer_fact({"type": "renderer_ready", "data": {
             "renderer_id": "pygame", "renderer_role": "pygame", "model_token": conversion_token,
-            "motion_groups": {"change_character": 1},
+            "motion_groups": {"change_character": 1, "change_character_maskoff": 1},
         }})
         self.assertIsNotNone(host._conversion_replay_switch)
         self.out.clear()
@@ -1254,10 +1364,9 @@ class RendererHostTest(unittest.TestCase):
         }})
         self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
         host.handle_renderer_fact({"type": "renderer_disconnected", "data": {"renderer_id": "pygame"}})
-        self.assertEqual(self.out[-1]["type"], "play_motion")
-        self.assertFalse(host.handle_renderer_fact({"type": "motion_finished", "data": {
-            "renderer_id": "pygame", "token": self.out[-1]["data"]["token"],
-        }}))
+        self.assertIsNone(host._pending_conversion)
+        self.assertIsNone(host._conversion_replay_motion)
+        self.assertFalse(any(message["type"] == "play_motion" for message in self.out))
 
     def test_unavailable_renderer_is_removed_from_execution_targets(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))

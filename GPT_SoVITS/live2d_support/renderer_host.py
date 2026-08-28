@@ -24,7 +24,7 @@ class SharedRendererHost:
     """Adapt shared behavior to a command/fact transport without SDK imports."""
 
     def __init__(self, emit: CommandEmitter, owner: AuthoritativeLive2DOwner,
-                 legacy_motion_complete_value=None) -> None:
+                 legacy_motion_complete_value=None, conversion_state_callback=None) -> None:
         self._emit = emit
         self._behavior = owner.behavior
         self._scheduler = owner.scheduler
@@ -38,6 +38,8 @@ class SharedRendererHost:
         self._unavailable_renderer_ids: set[str] = set()
         self._ready = False
         self._sakiko_conversion = owner.sakiko_conversion
+        self._conversion_state_callback = conversion_state_callback
+        self._conversion_commit_by_token: dict[str, SakikoConversionDecision] = {}
         self._pending_conversion: SakikoConversionDecision | None = None
         self._pending_conversion_model_token = ""
         self._pending_conversion_renderers: set[str] = set()
@@ -187,6 +189,7 @@ class SharedRendererHost:
             # any completed Sakiko conversion barrier.  Retire conversion
             # delivery/replay state without touching persistent Sakiko
             # black/white and mask state.
+            self._invalidate_conversion_commands()
             self._pending_conversion = None
             self._pending_conversion_model_token = ""
             self._pending_conversion_renderers.clear()
@@ -194,6 +197,7 @@ class SharedRendererHost:
             self._conversion_replay_switch = None
             self._conversion_replay_motion = None
             self._conversion_replay_renderers.clear()
+            self._conversion_commit_by_token.clear()
             model_key = str(
                 payload.get("character_folder_name")
                 or payload.get("character_folder")
@@ -388,11 +392,29 @@ class SharedRendererHost:
                 previous_instance = self._renderer_instances.get(renderer_id)
                 if previous_instance is not None and previous_instance != renderer_instance_id:
                     return False
+                expected_token = ""
+                if self._pending_model_switch is not None:
+                    expected_token = str(self._pending_model_switch.get("model_token") or "")
+                elif self._pending_conversion_switch is not None:
+                    expected_token = str(self._pending_conversion_switch.get("model_token") or "")
+                if expected_token and str(data.get("model_token") or "") != expected_token:
+                    # A stale ready fact may acknowledge transport health, but
+                    # must not overwrite the active catalog or model metadata.
+                    if self._pending_model_switch is not None:
+                        self._pending_model_switch_renderers.add(renderer_id)
+                        self._emit_model_switch({renderer_id})
+                    elif self._pending_conversion_switch is not None:
+                        self._pending_conversion_renderers.add(renderer_id)
+                        self._emit_model_switch_payload(self._pending_conversion_switch, {renderer_id})
+                    return True
+                # Only a matching instance/token may publish model metadata.
+                # Transport liveness is recorded after this validation so a
+                # stale ready fact cannot replace the active renderer state.
                 self._retired_renderer_ids.discard(renderer_id)
                 self._unavailable_renderer_ids.discard(renderer_id)
                 self._connected_renderer_ids.add(renderer_id)
                 self._renderer_ids.add(renderer_id)
-                self._renderer_roles[renderer_id] = str(data.get("renderer_role") or "")
+                self._renderer_roles[renderer_id] = str(data.get("renderer_role") or self._renderer_roles.get(renderer_id, ""))
                 self._renderer_instances[renderer_id] = renderer_instance_id
             motion_files = data.get("motion_files_by_group")
             expression_ids = data.get("expression_ids", ())
@@ -564,21 +586,30 @@ class SharedRendererHost:
         # conversion intent is observed, even when the runtime gate rejects
         # that conversion.
         self._scheduler.reset_long_audio()
+        self._invalidate_conversion_commands()
         # Apply the upstream guard even when the current runtime is
         # audio-only because its model has no motion capability.
         canonical_id = self._canonical_runtime_id()
         if canonical_id is not None:
             canonical_key = self._renderer_model_keys.get(canonical_id, "").lower()
             runtime_version = self._renderer_runtime_versions.get(canonical_id, "").lower()
+            runtime_role = self._renderer_roles.get(canonical_id, "").lower()
             if canonical_key != "sakiko":
                 return False
-            if runtime_version != "v2":
+            if runtime_role == "pygame" and runtime_version != "v2":
+                return False
+            # A renderer that only provides audio (or reports no motion
+            # capability) cannot execute the conversion model/motion pair.
+            # Keep the upstream Sakiko gate strict for Null/audio-only
+            # runtimes while allowing Electron's legacy ready schema, which
+            # does not include runtime_version, when it has motion support.
+            if not self._renderer_capabilities.get(canonical_id, {}).get("motion", False):
                 return False
         # A newer Sakiko conversion supersedes a normal model switch that has
         # not crossed its renderer barrier yet.
         self._pending_model_switch = None
         self._pending_model_switch_renderers.clear()
-        decision = self._sakiko_conversion.decide(conversion)
+        decision = self._sakiko_conversion.preview(conversion)
         if decision.model_target == "current":
             return self._emit_conversion_motion(decision)
         pygame_urls = next(
@@ -623,7 +654,10 @@ class SharedRendererHost:
             command = self._scheduler.request_fixed_motion(decision.motion_group, decision.fixed_index, decision.priority, decision.purpose)
         if command is not None and expression is not None:
             command = ScheduledMotion(command.group, command.index, command.priority, command.purpose, expression)
-        return self._emit_scheduled(command, replay_for_late_renderers=True)
+        return self._emit_scheduled(
+            command, replay_for_late_renderers=True,
+            conversion_decision=decision,
+        )
 
     def tick(self, *, include_long_audio: bool = True) -> bool:
         if self.model_switch_pending:
@@ -639,7 +673,8 @@ class SharedRendererHost:
             return False
         return self._emit_scheduled(self._scheduler.tick_long_audio())
 
-    def _emit_scheduled(self, scheduled: ScheduledMotion | None, *, replay_for_late_renderers: bool = False) -> bool:
+    def _emit_scheduled(self, scheduled: ScheduledMotion | None, *, replay_for_late_renderers: bool = False,
+                        conversion_decision: SakikoConversionDecision | None = None) -> bool:
         if scheduled is None:
             return False
         motion_targets = self._motion_renderer_ids()
@@ -651,6 +686,8 @@ class SharedRendererHost:
             scheduled.group, scheduled.index, scheduled.priority, expression_id=scheduled.expression_id,
         ), "", 0.0)
         self._scheduled_tokens[token] = scheduled.purpose
+        if conversion_decision is not None:
+            self._conversion_commit_by_token[token] = conversion_decision
         motion = motion_command(command)
         assert motion is not None
         if motion_targets:
@@ -773,6 +810,12 @@ class SharedRendererHost:
         self._motion_launch_resolved.discard(token)
         self._emotion_lifecycle_expected.pop(token, None)
 
+    def _invalidate_conversion_commands(self) -> None:
+        for token in list(self._conversion_commit_by_token):
+            self._conversion_commit_by_token.pop(token, None)
+            self._scheduled_tokens.pop(token, None)
+            self._clear_motion_tracking(token)
+
     def _record_motion_fact(self, token: str, renderer_id: str, kind: str) -> bool:
         expected = self._motion_expected.get(token)
         if expected is None:
@@ -816,13 +859,21 @@ class SharedRendererHost:
         started = self._motion_started.get(token, set())
         if token not in self._motion_launch_resolved:
             self._motion_launch_resolved.add(token)
-            if started:
-                self._scheduler.motion_started(purpose)
+        if started:
+            self._scheduler.motion_started(purpose)
         if started and not started <= self._motion_finished.get(token, set()):
             return
         self._scheduled_tokens.pop(token, None)
+        conversion_decision = self._conversion_commit_by_token.pop(token, None)
         self._scheduler.motion_finished(purpose)
         self._clear_motion_tracking(token)
+        if conversion_decision is not None and started:
+            self._sakiko_conversion.commit(conversion_decision)
+            if self._conversion_state_callback is not None:
+                try:
+                    self._conversion_state_callback(self._sakiko_conversion.is_black, self._sakiko_conversion.mask_on)
+                except Exception:
+                    pass
         if token == self._bye_token:
             self._bye_token = ""
             reason = "bye_renderer_disconnected" if disconnected else "bye_motion_finished"
@@ -1021,7 +1072,19 @@ class SharedRendererHost:
             self._renderer_instance_key(current_id)
             for current_id in self._renderer_ids
         }
-        self._emit_conversion_motion(pending)
+        # A disconnect/unavailable fact can settle the barrier with no
+        # executable renderer left.  Treat that as a rejected conversion,
+        # rather than emitting an orphan command that can never produce the
+        # started/finished facts required for the state commit.
+        if not self._motion_renderer_ids():
+            self._conversion_replay_switch = None
+            self._conversion_replay_motion = None
+            self._conversion_replay_renderers.clear()
+            return
+        if not self._emit_conversion_motion(pending):
+            self._conversion_replay_switch = None
+            self._conversion_replay_motion = None
+            self._conversion_replay_renderers.clear()
 
 
 class SharedRendererService:
@@ -1036,7 +1099,7 @@ class SharedRendererService:
     def __init__(self, intent_queue, renderer_fact_queue, command_queue,
                  owner: AuthoritativeLive2DOwner, legacy_motion_complete_value=None,
                  trace: CommandEmitter | None = None,
-                 ui_intent_queue=None) -> None:
+                 ui_intent_queue=None, conversion_state_callback=None) -> None:
         self._intents = intent_queue
         self._facts = renderer_fact_queue
         self._commands = command_queue
@@ -1044,7 +1107,10 @@ class SharedRendererService:
         # Electron controls that belong to the mature Qt UI are forwarded as
         # UI requests. They are deliberately kept outside the Live2D owner.
         self._ui_intent_queue = ui_intent_queue
-        self._host = SharedRendererHost(self._emit_command, owner, legacy_motion_complete_value)
+        self._host = SharedRendererHost(
+            self._emit_command, owner, legacy_motion_complete_value,
+            conversion_state_callback=conversion_state_callback,
+        )
         self._pending_intents = deque()
         self._bye_handled = Event()
         self._bye_completed = Event()

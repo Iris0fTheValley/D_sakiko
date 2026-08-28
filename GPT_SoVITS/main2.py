@@ -609,11 +609,16 @@ if __name__=='__main__':
     renderer_command_fanout = FanoutQueue(
         pygame_renderer_command_queue, electron_renderer_command_queue
     ) if pygame_enabled else FanoutQueue(electron_renderer_command_queue)
+    def on_sakiko_conversion_committed(is_black: bool, mask_on: bool) -> None:
+        dp_chat.sakiko_state = bool(is_black)
+        QT_message_queue.put("已切换为" + ("黑祥" if is_black else "白祥"))
+
     shared_renderer_service=SharedRendererService(
         owner_intent_queue, renderer_fact_queue,
         renderer_command_fanout, authoritative_owner, motion_complete_value,
         trace=build_live2d_trace_sink(),
         ui_intent_queue=electron_ui_command_queue,
+        conversion_state_callback=on_sakiko_conversion_committed,
     )
     initial_live2d_intent = build_initial_live2d_intent(characters)
     if initial_live2d_intent is not None:

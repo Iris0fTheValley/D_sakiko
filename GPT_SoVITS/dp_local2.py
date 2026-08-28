@@ -1954,9 +1954,11 @@ class DSLocalAndVoiceGen:
             return True
         if legacy_command == "conv":
             if self.if_sakiko:
-                self.sakiko_state = not self.sakiko_state
-                message_queue.put("已切换为" + ("黑祥" if self.sakiko_state else "白祥"))
-                char_is_converted_queue.put(self.sakiko_state)
+                # The shared owner decides and commits black/white state only
+                # after the matching renderer barrier and motion succeed.
+                # Keep this producer side-effect free so rejected conversions
+                # cannot mutate TTS/UI state prematurely.
+                char_is_converted_queue.put(not self.sakiko_state)
             else:
                 message_queue.put("祥子好像不在<w>")
             time.sleep(2)

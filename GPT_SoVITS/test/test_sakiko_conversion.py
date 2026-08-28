@@ -12,9 +12,11 @@ class SakikoConversionTest(unittest.TestCase):
  def test_white_and_mask_toggle_match_master_groups(self):
   state=SharedSakikoConversion(Random(1)); white=state.decide(False)
   self.assertEqual((white.model_target,white.semantic_expression,white.motion_group), ("white","idle","change_character"))
+  state.commit(white)
   self.assertEqual((state.decide("maskoff").motion_group,state.decide("maskoff").fixed_index), ("text_generating",0))
  def test_black_mask_toggle_flips_after_decision(self):
-  state=SharedSakikoConversion(Random(1)); state.decide(True)
-  self.assertEqual(state.decide("maskoff").motion_group,"change_character_maskoff")
+  state=SharedSakikoConversion(Random(1)); state.commit(state.decide(True))
+  first = state.decide("maskoff"); state.commit(first)
+  self.assertEqual(first.motion_group,"change_character_maskoff")
   self.assertEqual(state.decide("maskoff").motion_group,"maskon")
 if __name__=='__main__': unittest.main()
