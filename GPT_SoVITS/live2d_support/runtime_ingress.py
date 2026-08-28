@@ -81,15 +81,19 @@ class FanoutQueue:
 class LegacyControlIntentFanout:
     """Move control/conversion inputs to the same owner ingress as segments."""
 
-    def __init__(self, control_queue, conversion_queue, owner_intents, runtime_queue=None) -> None:
+    def __init__(self, control_queue, conversion_queue, owner_intents, runtime_queue=None,
+                 cancel_callback=None) -> None:
         self._control = control_queue
         self._conversion = conversion_queue
         self._intents = owner_intents
         self._runtime = runtime_queue
+        self._cancel_callback = cancel_callback
 
-    def run_once(self, *, max_items: int | None = None) -> int:
+    def run_once(self, *, max_items: int | None = None,
+                 include_controls: bool = True,
+                 include_conversions: bool = True) -> int:
         handled = 0
-        while max_items is None or handled < max_items:
+        while include_controls and (max_items is None or handled < max_items):
             try:
                 command = self._control.get_nowait()
             except Empty:
@@ -98,6 +102,8 @@ class LegacyControlIntentFanout:
                 self._intents.put({"type": "bye", "data": {}})
             elif isinstance(command, dict):
                 command_type = str(command.get("type") or "")
+                if command_type == "cancel_turn" and self._cancel_callback is not None:
+                    self._cancel_callback()
                 if command_type in {"change_l2d_background", "switch_l2d_fps", "toggle_l2d_layout_edit"} and self._runtime is not None:
                     self._runtime.put(dict(command))
                 else:
@@ -105,6 +111,8 @@ class LegacyControlIntentFanout:
             handled += 1
         conversion_handled = 0
         while max_items is None or conversion_handled < max_items:
+            if not include_conversions:
+                break
             try:
                 conversion = self._conversion.get_nowait()
             except Empty:

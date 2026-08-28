@@ -53,6 +53,28 @@ class LegacyEmotionAudioFanout:
         })
         return True
 
+    def discard_pending(self) -> None:
+        """Drop raw segments that were queued before an upstream cancel.
+
+        This is deliberately done at the legacy input boundary, before a
+        segment can be converted into a new owner intent.  Preserve the old
+        special bye marker if it was already queued.
+        """
+        saw_bye = False
+        while True:
+            try:
+                emotion = self._emotion_input.get_nowait()
+            except Empty:
+                break
+            saw_bye = saw_bye or emotion == "bye"
+        while True:
+            try:
+                self._audio_input.get_nowait()
+            except Empty:
+                break
+        if saw_bye:
+            self._emotion_input.put("bye")
+
     def run(self, stop_event, poll_interval_seconds: float = 0.02) -> None:
         while not stop_event.is_set():
             if not self.run_once():
@@ -75,15 +97,17 @@ class OrderedLegacyOwnerIngress:
         self._thinking = thinking_intents
 
     def run_once(self) -> int:
-        # The legacy loop consumes one control, then one conversion, then one
-        # thinking edge, and finally one emotion/audio pair per frame.
-        handled = self._control.run_once(max_items=1)
+        # The legacy loop consumes control, then the thinking edge, then
+        # conversion, and finally one emotion/audio pair per frame.
+        handled = self._control.run_once(max_items=1, include_conversions=False)
         if self._thinking is not None:
             try:
                 self._control.owner_intents.put(self._thinking.get_nowait())
                 handled += 1
             except Empty:
                 pass
+        # Conversion is a distinct phase after thinking in the upstream loop.
+        handled += self._control.run_once(max_items=1, include_controls=False, include_conversions=True)
         handled += int(self._emotion.run_once())
         return handled
 

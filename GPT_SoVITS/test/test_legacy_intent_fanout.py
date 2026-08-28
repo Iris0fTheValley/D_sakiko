@@ -85,8 +85,47 @@ class LegacyEmotionAudioFanoutTest(unittest.TestCase):
                   self.intents.get_nowait(), self.intents.get_nowait()]
         self.assertEqual(
             [event["type"] for event in events],
-            ["runtime_control", "sakiko_conversion", "thinking_changed", "emotion_segment"],
+            ["runtime_control", "thinking_changed", "sakiko_conversion", "emotion_segment"],
         )
+
+    def test_cancel_discards_three_raw_segments_before_owner_conversion(self):
+        controls, conversions = Queue(), Queue()
+        for index in range(3):
+            self.source_emotion.put(f"LABEL_{index}")
+            self.source_audio.put(f"voice-{index}.wav")
+        controls.put({"type": "cancel_turn"})
+        from live2d_support.runtime_ingress import LegacyControlIntentFanout
+        control = LegacyControlIntentFanout(
+            controls, conversions, self.intents,
+            cancel_callback=self.fanout.discard_pending,
+        )
+        ordered = OrderedLegacyOwnerIngress(
+            self.fanout, control,
+        )
+        self.assertEqual(ordered.run_once(), 1)
+        self.assertTrue(self.source_emotion.empty())
+        self.assertTrue(self.source_audio.empty())
+        self.assertEqual(self.intents.get_nowait()["data"]["type"], "cancel_turn")
+        self.assertFalse(self.intents.qsize())
+
+    def test_cancel_preserves_queued_bye_marker(self):
+        controls, conversions = Queue(), Queue()
+        self.source_emotion.put("LABEL_0")
+        self.source_audio.put("voice.wav")
+        self.source_emotion.put("bye")
+        controls.put({"type": "cancel_turn"})
+        from live2d_support.runtime_ingress import LegacyControlIntentFanout
+        ordered = OrderedLegacyOwnerIngress(
+            self.fanout,
+            LegacyControlIntentFanout(
+                controls, conversions, self.intents,
+                cancel_callback=self.fanout.discard_pending,
+            ),
+        )
+        ordered.run_once()
+        self.assertTrue(self.source_emotion.empty())
+        self.assertEqual(self.intents.get_nowait()["type"], "runtime_control")
+        self.assertEqual(self.intents.get_nowait()["type"], "bye")
 
 
 if __name__ == "__main__":

@@ -282,22 +282,51 @@ class RendererHostTest(unittest.TestCase):
         service.run_once()
         self.assertEqual(commands.get_nowait()["type"], "play_motion")
 
-    def test_service_prioritizes_control_before_emotion_when_queue_arrives_reordered(self):
+    def test_service_defers_emotion_until_switch_ready_commits_new_catalog(self):
+        intents, facts, commands = Queue(), Queue(), Queue()
+        service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner(rng=Random(0)))
+        facts.put({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one", "renderer_role": "pygame",
+            "model_token": "old", "motion_groups": {"sadness": 1},
+        }})
+        service.run_once()
+        intents.put({"type": "runtime_control", "data": {
+            "type": "switch_live2d", "character_name": "爱音",
+            "character_folder_name": "anon", "model_json": "anon.model.json",
+            "model_token": "new",
+        }})
+        intents.put({"type": "emotion_segment", "data": {
+            "emotion": "LABEL_0", "audio_path": "voice.wav",
+        }})
+        service.run_once()
+        self.assertEqual(commands.get_nowait()["type"], "switch_live2d")
+        self.assertTrue(service._pending_intents)
+        facts.put({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_instance_id": "one", "renderer_role": "pygame",
+            "model_token": "new", "motion_groups": {"happiness": 1},
+        }})
+        service.run_once()
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
+
+    def test_service_preserves_owner_queue_order_without_global_overtaking(self):
         intents, facts, commands = Queue(), Queue(), Queue()
         service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner(rng=Random(0)))
         facts.put({"type": "renderer_ready", "data": {"motion_groups": {"happiness": 1}}})
         intents.put({"type": "emotion_segment", "data": {"emotion": "LABEL_0", "audio_path": "old.wav"}})
         intents.put({"type": "runtime_control", "data": {"type": "cancel_turn"}})
         service.run_once()
-        self.assertFalse(any(command.get("type") == "play_motion" for command in list(commands.queue)))
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
+        service.run_once()
+        self.assertTrue(any(command.get("type") == "stop_motion" for command in list(commands.queue)))
 
     def test_cancel_drops_emotion_backlog_already_in_owner_queue(self):
         intents, facts, commands = Queue(), Queue(), Queue()
         service = SharedRendererService(intents, facts, commands, AuthoritativeLive2DOwner(rng=Random(0)))
+        facts.put({"type": "renderer_ready", "data": {"motion_groups": {"happiness": 1}}})
         intents.put({"type": "emotion_segment", "data": {"emotion": "LABEL_0", "audio_path": "old.wav"}})
         intents.put({"type": "runtime_control", "data": {"type": "cancel_turn"}})
         service.run_once()
-        self.assertFalse(any(command.get("type") == "play_motion" for command in list(commands.queue)))
+        self.assertEqual(commands.get_nowait()["type"], "play_motion")
 
     def test_no_model_ready_fact_preserves_audio_fallback(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))

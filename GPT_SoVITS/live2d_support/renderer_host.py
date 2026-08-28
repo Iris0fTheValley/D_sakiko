@@ -98,6 +98,11 @@ class SharedRendererHost:
     def all_renderers_unavailable(self) -> bool:
         return bool(self._unavailable_renderer_ids) and not self._renderer_ids
 
+    @property
+    def model_switch_pending(self) -> bool:
+        """Whether emotion decisions must wait for a matching ready fact."""
+        return self._pending_model_switch is not None or self._pending_conversion is not None
+
     def reject_emotion_segment(self, *, turn_id: str, segment_id: str, emotion: str,
                                audio_path: str, audio_duration_seconds: float = 0.0) -> bool:
         """Resolve a terminal no-runtime fact without leaving owner state active."""
@@ -654,9 +659,12 @@ class SharedRendererHost:
         semantic = "serious" if model_key == "sakiko" and "costume" in model_path else "idle"
         scheduled = self._scheduler.request_motion("change_character", 3, "change_character")
         if scheduled is None:
-            # Keep the switch pending until a renderer reports its catalog;
-            # Electron-only startup must not lose the initial model decision.
-            return False
+            # The model-ready fact already committed the new catalog.  Missing
+            # change-character motion must not keep later emotion decisions
+            # blocked, just as the upstream loop simply skipped that motion.
+            self._pending_model_switch = None
+            self._pending_model_switch_renderers.clear()
+            return True
         expression_id = self._scheduler.resolve_semantic_expression(semantic)
         if expression_id:
             scheduled = ScheduledMotion(
@@ -1075,22 +1083,10 @@ class SharedRendererService:
                 self._pending_intents.popleft()
                 continue
             intent_type = intent.get("type")
-            if intent_type == "emotion_segment":
-                # Controls, thinking edges, and conversions are handled before
-                # the emotion branch in the upstream Pygame frame.  Preserve
-                # that priority even if independent producers reached the
-                # owner queue in the opposite order.
-                control_index = next(
-                    (index for index, candidate in enumerate(self._pending_intents)
-                     if isinstance(candidate, Mapping) and candidate.get("type") != "emotion_segment"),
-                    None,
-                )
-                if control_index is not None:
-                    selected = self._pending_intents[control_index]
-                    del self._pending_intents[control_index]
-                    self._pending_intents.appendleft(selected)
-                    intent = self._pending_intents[0]
-                    intent_type = intent.get("type")
+            if intent_type == "emotion_segment" and self._host.model_switch_pending:
+                # A switch command is a renderer barrier.  Leave the segment
+                # queued until the matching ready fact commits its catalog.
+                break
             if intent_type == "emotion_segment" and emotion_processed:
                 # Upstream consumes at most one emotion/audio pair per frame.
                 # Keep later pairs queued for the next owner cycle.

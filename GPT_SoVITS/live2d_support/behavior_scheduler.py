@@ -32,7 +32,9 @@ class SharedBehaviorScheduler:
         self._thinking_due: float | None = None
         self._motion_over = True
         self._audio_busy = False
-        self._idle_recover_due = now + 2.5
+        # Upstream starts with no completed-motion recovery edge.  The first
+        # 2.5s idle recovery is armed only after a motion actually finishes.
+        self._idle_recover_due = float("inf")
         self._timed_idle_due = now + 25.0
         self._long_group = ""
         self._long_enabled = False
@@ -188,9 +190,12 @@ class SharedBehaviorScheduler:
             command = self._exact("idle_motion", 1, "idle_recover")
             if command is not None:
                 return command
-        if not self._audio_busy and not self._thinking and now >= self._timed_idle_due:
+        if now >= self._timed_idle_due:
+            # Advance the wall-clock timer even while audio/thinking blocks
+            # the action, matching the upstream periodic check.
             self._timed_idle_due = now + 25.0
-            return self._exact("IDLE", 1, "timed_idle")
+            if not self._audio_busy and not self._thinking:
+                return self._exact("IDLE", 1, "timed_idle")
         return None
 
     def timed_idle_due(self) -> ScheduledMotion | None:

@@ -37,7 +37,9 @@ class SchedulerTest(unittest.TestCase):
         self.s.set_catalog({"text_generating": 1}); self.assertEqual(self.s.request_fixed_motion("text_generating", 0, 3, "mask_white").index, 0)
         self.assertIsNone(self.s.request_fixed_motion("text_generating", 1, 3, "mask_white"))
     def test_idle_and_click_preserve_master_conditions(self):
-        self.clock.value = 2.5; self.assertEqual(self.s.tick().purpose, "idle_recover")
+        self.clock.value = 2.5; self.assertIsNone(self.s.tick())
+        self.s.start_segment("happiness", 1.0); self.s.motion_finished("emotion")
+        self.clock.value = 5.0; self.assertEqual(self.s.tick().purpose, "idle_recover")
         self.assertIsNone(self.s.click(is_sakiko=False)); self.assertEqual(self.s.click(is_sakiko=True).purpose, "click")
     def test_center_variant_is_resolved_before_executor(self):
         self.s.set_catalog({"IDLE": 1, "IDLE_C": 2})
@@ -62,6 +64,7 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(self.s.tick().purpose, "timed_idle")
 
     def test_idle_recovery_does_not_starve_next_timed_idle(self):
+        self.s.start_segment("happiness", 1.0); self.s.motion_finished("emotion")
         self.clock.value = 2.5
         self.assertEqual(self.s.tick().purpose, "idle_recover")
         self.s.motion_finished("idle_recover")
@@ -74,5 +77,15 @@ class SchedulerTest(unittest.TestCase):
         self.s.set_audio_busy(True)
         self.clock.value = 2.5
         self.assertIsNone(self.s.tick())
+
+    def test_timed_idle_deadline_advances_while_audio_or_thinking_is_busy(self):
+        self.clock.value = 25.0
+        self.s.set_audio_busy(True)
+        self.assertIsNone(self.s.tick())
+        self.s.set_audio_busy(False)
+        self.clock.value = 49.9
+        self.assertIsNone(self.s.tick())
+        self.clock.value = 50.0
+        self.assertEqual(self.s.tick().purpose, "timed_idle")
 
 if __name__ == '__main__': unittest.main()

@@ -632,6 +632,7 @@ if __name__=='__main__':
     change_char_queue=multiprocessing.Queue()
     control_intent_fanout=LegacyControlIntentFanout(
         change_char_queue, char_is_converted_queue, owner_intent_queue, pygame_runtime_control_queue,
+        cancel_callback=legacy_intent_fanout.discard_pending,
     )
     ordered_owner_ingress = OrderedLegacyOwnerIngress(
         legacy_intent_fanout, control_intent_fanout, thinking_intent_queue,
