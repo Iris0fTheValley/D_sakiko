@@ -43,6 +43,7 @@ class SharedRendererHost:
         self._pending_conversion: SakikoConversionDecision | None = None
         self._pending_conversion_model_token = ""
         self._pending_conversion_renderers: set[str] = set()
+        self._pending_conversion_ready_renderers: set[str] = set()
         self._pending_conversion_switch: dict[str, Any] | None = None
         # The owner may finish a conversion before a renderer connects. Keep
         # the already-resolved commands so that a late renderer executes the
@@ -163,6 +164,7 @@ class SharedRendererHost:
             self._pending_conversion = None
             self._pending_conversion_model_token = ""
             self._pending_conversion_renderers.clear()
+            self._pending_conversion_ready_renderers.clear()
             self._pending_conversion_switch = None
             self._conversion_replay_switch = None
             self._conversion_replay_motion = None
@@ -193,6 +195,7 @@ class SharedRendererHost:
             self._pending_conversion = None
             self._pending_conversion_model_token = ""
             self._pending_conversion_renderers.clear()
+            self._pending_conversion_ready_renderers.clear()
             self._pending_conversion_switch = None
             self._conversion_replay_switch = None
             self._conversion_replay_motion = None
@@ -460,6 +463,7 @@ class SharedRendererHost:
                         self._pending_conversion_switch or {}, {renderer_id},
                     )
                 else:
+                    self._pending_conversion_ready_renderers.add(renderer_id)
                     self._pending_conversion_renderers.discard(renderer_id)
                 self._finish_pending_conversion_if_ready()
             elif renderer_id and self._conversion_replay_switch is not None:
@@ -586,7 +590,15 @@ class SharedRendererHost:
         # conversion intent is observed, even when the runtime gate rejects
         # that conversion.
         self._scheduler.reset_long_audio()
+        pending_target = (
+            self._pending_conversion.resulting_is_black
+            if self._pending_conversion is not None
+            and self._pending_conversion.resulting_is_black is not None
+            else self._sakiko_conversion.is_black
+        )
         self._invalidate_conversion_commands()
+        if conversion == "toggle":
+            conversion = not pending_target
         # Apply the upstream guard even when the current runtime is
         # audio-only because its model has no motion capability.
         canonical_id = self._canonical_runtime_id()
@@ -647,6 +659,15 @@ class SharedRendererHost:
         return True
 
     def _emit_conversion_motion(self, decision: SakikoConversionDecision) -> bool:
+        # A current-model conversion has no model barrier; commit the
+        # authoritative mask/state before emitting its presentation motion.
+        if decision.model_target == "current":
+            self._sakiko_conversion.commit(decision)
+            if self._conversion_state_callback is not None:
+                try:
+                    self._conversion_state_callback(self._sakiko_conversion.is_black, self._sakiko_conversion.mask_on)
+                except Exception:
+                    pass
         expression = self._scheduler.resolve_semantic_expression(decision.semantic_expression) if decision.semantic_expression else None
         if decision.fixed_index is None:
             command = self._scheduler.request_motion(decision.motion_group, decision.priority, decision.purpose)
@@ -654,10 +675,7 @@ class SharedRendererHost:
             command = self._scheduler.request_fixed_motion(decision.motion_group, decision.fixed_index, decision.priority, decision.purpose)
         if command is not None and expression is not None:
             command = ScheduledMotion(command.group, command.index, command.priority, command.purpose, expression)
-        return self._emit_scheduled(
-            command, replay_for_late_renderers=True,
-            conversion_decision=decision,
-        )
+        return self._emit_scheduled(command, replay_for_late_renderers=True)
 
     def tick(self, *, include_long_audio: bool = True) -> bool:
         if self.model_switch_pending:
@@ -864,16 +882,9 @@ class SharedRendererHost:
         if started and not started <= self._motion_finished.get(token, set()):
             return
         self._scheduled_tokens.pop(token, None)
-        conversion_decision = self._conversion_commit_by_token.pop(token, None)
+        self._conversion_commit_by_token.pop(token, None)
         self._scheduler.motion_finished(purpose)
         self._clear_motion_tracking(token)
-        if conversion_decision is not None and started:
-            self._sakiko_conversion.commit(conversion_decision)
-            if self._conversion_state_callback is not None:
-                try:
-                    self._conversion_state_callback(self._sakiko_conversion.is_black, self._sakiko_conversion.mask_on)
-                except Exception:
-                    pass
         if token == self._bye_token:
             self._bye_token = ""
             reason = "bye_renderer_disconnected" if disconnected else "bye_motion_finished"
@@ -1065,8 +1076,21 @@ class SharedRendererHost:
         self._pending_conversion_model_token = ""
         switch = dict(self._pending_conversion_switch or {})
         self._pending_conversion_switch = None
+        ready_renderers = set(self._pending_conversion_ready_renderers)
+        self._pending_conversion_ready_renderers.clear()
+        if not ready_renderers:
+            self._conversion_replay_switch = None
+            self._conversion_replay_motion = None
+            self._conversion_replay_renderers.clear()
+            return
         if switch:
             self._current_model_switch = deepcopy(switch)
+        self._sakiko_conversion.commit(pending)
+        if self._conversion_state_callback is not None:
+            try:
+                self._conversion_state_callback(self._sakiko_conversion.is_black, self._sakiko_conversion.mask_on)
+            except Exception:
+                pass
         self._conversion_replay_switch = switch or None
         self._conversion_replay_renderers = {
             self._renderer_instance_key(current_id)

@@ -1958,7 +1958,10 @@ class DSLocalAndVoiceGen:
                 # after the matching renderer barrier and motion succeed.
                 # Keep this producer side-effect free so rejected conversions
                 # cannot mutate TTS/UI state prematurely.
-                char_is_converted_queue.put(not self.sakiko_state)
+                # The owner resolves the toggle against authoritative state
+                # (including any pending conversion); producers do not pick
+                # a black/white target from their local mirror.
+                char_is_converted_queue.put("toggle")
             else:
                 message_queue.put("祥子好像不在<w>")
             time.sleep(2)

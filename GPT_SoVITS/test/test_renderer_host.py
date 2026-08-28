@@ -358,7 +358,7 @@ class RendererHostTest(unittest.TestCase):
         }})
         self.assertFalse(null_host.start_sakiko_conversion(True, {"black": "black.model.json"}))
 
-    def test_conversion_state_commits_only_after_motion_success(self):
+    def test_conversion_state_commits_at_model_barrier_before_motion(self):
         committed = []
         host = SharedRendererHost(
             self.out.append,
@@ -377,9 +377,11 @@ class RendererHostTest(unittest.TestCase):
             "runtime_version": "v2", "model_token": switch["data"]["model_token"],
             "motion_groups": {"change_character": 1, "change_character_maskoff": 1},
         }})
+        self.assertFalse(host._sakiko_conversion.is_black)
+        self.assertEqual(committed, [(False, True)])
         motion = self.out[-1]
         host.handle_renderer_fact({"type": "motion_rejected", "data": {"renderer_id": "pygame", "token": motion["data"]["token"]}})
-        self.assertEqual(committed, [])
+        self.assertEqual(committed, [(False, True)])
 
     def test_stale_ready_does_not_replace_pending_conversion_catalog(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
@@ -531,6 +533,21 @@ class RendererHostTest(unittest.TestCase):
         self.assertEqual(host._pending_conversion_model_token, new_token)
         self.assertTrue(host._pending_conversion is not None)
 
+    def test_conversion_toggle_uses_pending_authoritative_target(self):
+        host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": "old",
+            "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion("toggle", {"white": "white.model.json"}))
+        first_token = host._pending_conversion_model_token
+        self.assertFalse(host._pending_conversion.resulting_is_black)
+        self.assertTrue(host.start_sakiko_conversion("toggle", {"black": "black.model.json"}))
+        self.assertNotEqual(first_token, host._pending_conversion_model_token)
+        self.assertTrue(host._pending_conversion.resulting_is_black)
+        self.assertEqual(host._pending_conversion_switch["model_url"], "black.model.json")
+
     def test_conversion_disconnect_without_motion_renderer_is_discarded(self):
         committed = []
         host = SharedRendererHost(
@@ -548,6 +565,26 @@ class RendererHostTest(unittest.TestCase):
         self.assertIsNone(host._conversion_replay_motion)
         self.assertEqual(committed, [])
         self.assertFalse(any(m.get("type") == "play_motion" and m.get("data", {}).get("model_token") == token for m in self.out))
+
+    def test_conversion_commits_when_presentation_motion_is_missing(self):
+        committed = []
+        host = SharedRendererHost(
+            self.out.append, AuthoritativeLive2DOwner(rng=Random(0)),
+            conversion_state_callback=lambda black, mask: committed.append((black, mask)),
+        )
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": "old", "motion_groups": {"change_character": 1},
+        }})
+        self.assertTrue(host.start_sakiko_conversion(False, {"white": "white.model.json"}))
+        switch_token = host._pending_conversion_model_token
+        host.handle_renderer_fact({"type": "renderer_ready", "data": {
+            "renderer_id": "pygame", "renderer_role": "pygame", "model_key": "sakiko",
+            "runtime_version": "v2", "model_token": switch_token, "motion_groups": {},
+            "capabilities": {"motion": False, "audio": True},
+        }})
+        self.assertEqual(committed, [(False, True)])
+        self.assertFalse(any(m.get("type") == "play_motion" for m in self.out))
 
     def test_stale_ready_does_not_replace_renderer_metadata(self):
         host = SharedRendererHost(self.out.append, AuthoritativeLive2DOwner(rng=Random(0)))
